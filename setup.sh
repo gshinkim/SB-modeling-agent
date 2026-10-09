@@ -36,7 +36,7 @@ done
 # file, over GitHub's 100 MB limit for git itself, and 65 minutes to train otherwise.
 # SKIP_LAYLA=1 leaves it out; the app then routes with Jev, or not at all.
 LAYLA="Layla (altlernative to jev)"
-LAYLA_WEIGHTS="${LAYLA_WEIGHTS:-https://github.com/gshinkim/MCA-Analaysis/releases/download/layla-v1/layla-checkpoint.tar}"
+LAYLA_WEIGHTS="${LAYLA_WEIGHTS:-https://github.com/gshinkim/MCA-Agent/releases/download/layla-v1/layla-checkpoint.tar}"
 if [ "${SKIP_LAYLA:-}" != 1 ]; then
   [ -d "$LAYLA/.venv" ] || "$PY" -m venv "$LAYLA/.venv"
   "$LAYLA/.venv/bin/python" -m pip install -q --upgrade pip

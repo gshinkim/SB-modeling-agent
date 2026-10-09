@@ -16,8 +16,8 @@ You need:
 Then:
 
 ```bash
-git clone https://github.com/gshinkim/MCA-Analaysis.git
-cd MCA-Analaysis
+git clone https://github.com/gshinkim/MCA-Agent.git
+cd MCA-Agent
 ./setup.sh     # once: Python venv, Tellurium, the Layla router and its weights
 ./run.sh       # open http://127.0.0.1:5173
 ```
