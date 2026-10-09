@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { FORMAT } from '../web/js/prompt.mjs';
 import { logLine, hintLine, autoBlock } from './router.mjs';
+import { VENV_PY } from './tellurium.mjs';
 
 /* The agent runtime is the Claude Code CLI, because that is what the project's
    assets are written against: agents/model-scientist.md is a subagent definition
@@ -24,10 +28,10 @@ did not make to that file.
 Simulation settings the user has set live in workspace/settings.json
 ({start, end, points}); honour them when you simulate unless asked otherwise.
 
-Tellurium is installed at ./.venv/bin/python (tellurium, roadrunner, numpy, scipy).
-Always invoke it as ./.venv/bin/python - the system python3 does NOT have tellurium.
+Tellurium is installed at ./${VENV_PY} (tellurium, roadrunner, numpy, scipy).
+Always invoke it as ./${VENV_PY} - the system python3 does NOT have tellurium.
 Running it is pre-approved, whether or not the workflow is on. Write the script with
-the Write tool, then run it as one plain command: ./.venv/bin/python <script>. No
+the Write tool, then run it as one plain command: ./${VENV_PY} <script>. No
 heredocs, no \`cat >\`, no chains of commands - a long compound command is refused as
 a whole even though every part of it is allowed. If a run was denied earlier in this
 conversation, that was the command's shape, not Tellurium: retry in this shape.
@@ -71,6 +75,49 @@ performed - and still say how well supported each part of your answer is.
 
 Be proportionate: a short question gets a short, direct answer.
 `.trim();
+
+/* The CLI can only discover Skills under .claude/skills, and announces that as each
+   Skill's base directory. The real folder is skills/ at the install root; say so by
+   absolute path, so the agent reads the files the user edits and never goes looking
+   in its own ~/.claude/skills or in the workspace. */
+export const skillsBlock = root => `
+
+## Where the Skills are
+
+This project's Skills (mca, tellurium, pathway-modeling) are the folder
+\`${join(root, 'skills')}\`
+Load one with the Skill tool by its bare name. The tool will report a base directory
+ending in .claude/skills/<name>: that is only a link the CLI needs. Read a Skill's
+reference files from \`${join(root, 'skills')}\`/<name>/ instead. Skills are not in
+workspace/, not in your working folder, and not in the user's home ~/.claude/skills;
+never look for them or load same-named Skills from there.
+
+## A loaded index is not a used Skill
+
+A Skill's SKILL.md is only its index. Having it in front of you - because you loaded
+it, or because it was put in this prompt for you - does not mean you have used the
+Skill. You have used a Skill only when you have opened the reference files its index
+points to for this question and worked from what they say.
+
+Do not trust what you already know. Before you build, change or analyse anything:
+1. Decide which Skills the request touches. Building or changing a model, kinetics,
+   steady states, stability or oscillation: pathway-modeling. Any Tellurium or
+   Antimony code: tellurium. Control coefficients, elasticities, or any claim about
+   what controls or limits a pathway: mca. Most requests touch more than one.
+2. For each one, read its index, then open the specific reference files that cover
+   the request. Do this before writing the model or the script, not after.
+3. Before your final answer, check again: for every Skill the request touched, name
+   to yourself the reference files you opened. If the answer is none, stop and read
+   them now, then revise the work if they change it.
+
+Go back to a Skill as often as you need. Each Skill holds many reference files, and
+having read one part of it is no reason not to read another: after one pathway-modeling
+chapter you may open a second and a third. You may also open the same reference file
+again if you no longer remember what it said. "Do not load it again" only ever means
+the index itself.
+
+If you are unsure whether a Skill applies, it applies: open it. Never tell the user
+you used a Skill whose reference files you did not open.`;
 
 // Sessions this process actually started. A id is claimed once with --session-id
 // and continued with --resume; guessing wrong is an immediate exit(1).
@@ -135,12 +182,14 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
     // read/edit files in the project, and nothing else. Widen only deliberately.
     '--allowedTools',
     'Skill', ...(useWorkflow ? ['Workflow'] : []), 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'TodoWrite',
-    'Bash(./.venv/bin/python:*)', 'Bash(.venv/bin/python:*)',
+    `Bash(./${VENV_PY}:*)`, `Bash(${VENV_PY}:*)`,
     // The agent writes scripts to the working folder by absolute path, so it runs the
     // venv by absolute path too — often after a `cd`. A plain absolute-path rule never
     // matches (the path is quoted: spaces, parentheses); the leading * does.
-    `Bash(*${root}/.venv/bin/python*)`,
-    '--append-system-prompt', projectModel(SYSTEM_APPEND + (scratch ? scratchBlock(scratch) : '') +
+    // On Windows the agent's shell is Git Bash, which may spell the root C:/..., /c/...
+    // or with backslashes, so there the rule matches on the venv path alone.
+    `Bash(*${process.platform === 'win32' ? '' : root}/${VENV_PY}*)`,
+    '--append-system-prompt', projectModel(SYSTEM_APPEND + skillsBlock(root) + (scratch ? scratchBlock(scratch) : '') +
                               liveModelBlock(liveModel) + summaryBlock(summary) +
                               (useWorkflow ? '' : '\n\n' + NO_WORKFLOW), modelPath),
     '--settings', JSON.stringify({ enableWorkflows: useWorkflow }),
@@ -171,6 +220,9 @@ export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow
     if (router) {
       const r = await router({});
       onEvent({ type: 'log', text: logLine(r) });
+      // Shown like any load, as the local agent does: the CLI is told not to load these
+      // again, so no Skill tool call would otherwise ever put them in the chat.
+      if (r.auto.length) onEvent({ type: 'tools', tools: r.auto.map(([name]) => ({ name: 'load_skill', input: { name, by: 'router' } })) });
       prompt += hintLine(r.hint) + await autoBlock(r.auto, root);
     }
     // stopped while routing: end the turn as a killed CLI would, without starting one
@@ -184,15 +236,26 @@ export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow
 }
 
 function spawnClaude(args, root, env, emit, sid) {
-  const proc = spawn('claude', args, {
+  /* Windows caps a whole command line at 32,767 characters, and a turn's prompt (with
+     Skills inlined) plus its system prompt (live model, history) can pass that. So
+     neither rides in argv: the prompt goes in on stdin, the system prompt in a file. */
+  const [, prompt, ...rest] = args;                       // buildArgs starts '-p', prompt
+  const i = rest.indexOf('--append-system-prompt');
+  const sysFile = join(tmpdir(), `mca-atlas-${sid}.txt`);
+  writeFileSync(sysFile, rest[i + 1]);
+  rest.splice(i, 2, '--append-system-prompt-file', sysFile);
+  const tidy = () => rmSync(sysFile, { force: true });
+  const proc = spawn('claude', ['-p', ...rest], {
     cwd: root,
     // extended thinking is off by default in print mode; the UI has a place to show it.
     // Only MAX_THINKING_TOKENS is a caller override — the request body's `env` is not
     // otherwise merged into the child process (it used to be, letting a direct POST
     // set PATH, CLAUDE_*, proxy vars, etc. for the `claude` subprocess).
     env: { ...process.env, MAX_THINKING_TOKENS: String(env.MAX_THINKING_TOKENS ?? '6000') },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
+  proc.stdin.on('error', () => {});                       // no CLI to write to: 'error' below reports it
+  proc.stdin.end(prompt);
 
   let buf = '';
   proc.stdout.setEncoding('utf8');
@@ -208,10 +271,11 @@ function spawnClaude(args, root, env, emit, sid) {
   });
   proc.stderr.setEncoding('utf8');
   proc.stderr.on('data', d => emit({ type: 'stderr', text: String(d) }));
-  proc.on('error', e => emit({ type: 'fatal', error: e.code === 'ENOENT'
-    ? 'The `claude` CLI was not found on PATH. Install Claude Code, or pick a different runtime in Settings.'
-    : e.message }));
-  proc.on('close', code => emit({ type: 'done', code, sessionId: sid }));
+  proc.on('error', e => { tidy(); emit({ type: 'fatal', error: e.code === 'ENOENT'
+    ? 'The `claude` CLI was not found on PATH. Install Claude Code, or pick a different runtime in Settings.' +
+      (process.platform === 'win32' ? ' On Windows use the native installer (claude.exe); the npm install is a .cmd shim this app cannot start.' : '')
+    : e.message }); });
+  proc.on('close', code => { tidy(); emit({ type: 'done', code, sessionId: sid }); });
   return proc;
 }
 
@@ -220,6 +284,14 @@ export function toUiEvent(ev) {
   if (ev.type === 'stderr' || ev.type === 'fatal' || ev.type === 'done') return ev;
   if (ev.type === 'system' && ev.subtype === 'init')
     return { type: 'init', model: ev.model, tools: ev.tools, agents: ev.agents, sessionId: ev.session_id };
+  /* A workflow's stages run as subagents whose tool calls the CLI does not stream: all
+     that reaches here is progress, described as "<phase title>: <stage label>". Without
+     it a workflow turn showed one chip and then nothing for minutes. */
+  if (ev.type === 'system' && ev.subtype === 'task_progress') {
+    const tail = ': ' + ev.last_tool_name;
+    return ev.last_tool_name && ev.description?.endsWith(tail)
+      ? { type: 'phase', phase: ev.description.slice(0, -tail.length), label: ev.last_tool_name } : null;
+  }
   if (ev.type === 'stream_event') {
     const d = ev.event?.delta;
     if (d?.type === 'text_delta' && d.text) return { type: 'delta', text: d.text };

@@ -24,7 +24,7 @@ export function runTurn({ root, sdir, mfile, scratch, message, ask, routerCfg, r
     // history.md is the whole memory: it goes in the system prompt, and the model gets
     // no separate message history — one copy of each turn, never two.
     const memory = sdir ? await readHistory(sdir) : '';
-    const modelPath = relative(root, mfile);
+    const modelPath = relative(root, mfile).replaceAll('\\', '/');   // prompts and agent.mjs compare it as posix
     const before = await readFile(mfile, 'utf8').catch(()=> '');
 
     // The awaits above (readHistory can wait behind a prior turn's compaction) can

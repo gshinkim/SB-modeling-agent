@@ -101,7 +101,7 @@ async function recordMove(from, to) {
   // in one turn re-points the first one's link)
   for (const h of held.keys()) if (h !== to && follow(h) === to) {
     if ((await lstat(h).catch(() => null))?.isSymbolicLink()) await unlink(h);
-    await symlink(to, h).catch(e => console.error('[rename link]', e.message));
+    await symlink(to, h, 'junction').catch(e => console.error('[rename link]', e.message));
   }
 }
 
@@ -116,7 +116,8 @@ async function claimId(runsRoot, want, keep, srcDir) {
       else await mkdir(target);
       return { id, dir: target };
     } catch (err) {
-      if (['EEXIST', 'ENOTEMPTY', 'ENOTDIR'].includes(err.code)) continue; // taken since the check — try the next id
+      // taken since the check — try the next id (Windows reports a taken name as EPERM)
+      if (['EEXIST', 'ENOTEMPTY', 'ENOTDIR'].includes(err.code) || err.code === 'EPERM' && existsSync(target)) continue;
       throw err;
     }
   }

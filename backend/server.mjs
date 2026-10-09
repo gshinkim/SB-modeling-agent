@@ -2,10 +2,10 @@ import { createServer } from 'node:http';
 import { readFile, writeFile, mkdir, stat, readdir, access } from 'node:fs/promises';
 import { constants as FS } from 'node:fs';
 import { existsSync } from 'node:fs';
-import { join, extname, normalize, dirname, sep } from 'node:path';
+import { join, extname, normalize, dirname, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
-import { Tellurium } from './tellurium.mjs';
+import { Tellurium, VENV_PY } from './tellurium.mjs';
 import { runAgent } from './agent.mjs';
 import { runLocalAgent, Chat } from './local-agent.mjs';
 import { runTurn, modelVersion } from './turn.mjs';
@@ -70,9 +70,12 @@ async function compactWith({ runtime, chatCfg, model }, [sys, user]) {
     return msg.content;
   }
   return new Promise((ok, fail) => {
-    const p = spawn('claude', ['-p', user.content, '--append-system-prompt', sys.content,
+    // the batch goes in on stdin, not argv: Windows caps a command line at 32,767 characters
+    const p = spawn('claude', ['-p', '--append-system-prompt', sys.content,
                                '--setting-sources', 'project', ...(model ? ['--model', model] : [])],
-                    { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] });
+                    { cwd: ROOT, stdio: ['pipe', 'pipe', 'ignore'] });
+    p.stdin.on('error', () => {});
+    p.stdin.end(user.content);
     let out = '';
     p.stdout.setEncoding('utf8').on('data', d => (out += d));
     const t = setTimeout(() => p.kill(), 120_000);
@@ -94,7 +97,7 @@ async function ensureWorkspace() {
 async function resolveScratch(dir) {
   if (!dir) return RUNS;
   const p = normalize(String(dir));
-  if (!p.startsWith('/')) throw new Error('the working folder must be an absolute path');
+  if (!isAbsolute(p)) throw new Error('the working folder must be an absolute path');
   const st = await stat(p).catch(() => null);
   if (!st) throw new Error('no such folder: ' + p);
   if (!st.isDirectory()) throw new Error('not a folder: ' + p);
@@ -122,12 +125,14 @@ const noteEditorWrite = (file, src) => {
 const editorEcho = (file, src) =>
   (editorWrote.get(file) ?? []).some(w => w.src === src && Date.now() - w.t < 5000);
 
-const which = cmd => new Promise(r =>
-  execFile('sh', ['-lc', `command -v ${cmd}`], (e, out) => r(e ? null : out.trim())));
+const WIN = process.platform === 'win32';
+const which = cmd => new Promise(r => WIN
+  ? execFile('where', [cmd], (e, out) => r(e ? null : out.split(/\r?\n/)[0].trim()))
+  : execFile('sh', ['-lc', `command -v ${cmd}`], (e, out) => r(e ? null : out.trim())));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // LM Studio installs its CLI here and only adds it to PATH if you let it.
-const lmsBin = async () => (await which('lms')) ??
-  (existsSync(join(homedir(), '.lmstudio/bin/lms')) ? join(homedir(), '.lmstudio/bin/lms') : null);
+const LMS = join(homedir(), '.lmstudio/bin/lms' + (WIN ? '.exe' : ''));
+const lmsBin = async () => (await which('lms')) ?? (existsSync(LMS) ? LMS : null);
 
 /* Ask an OpenAI-compatible server what it serves. Done here rather than in the
    page: the browser reaching localhost needs OLLAMA_ORIGINS or a CORS setting on
@@ -312,7 +317,7 @@ const routes = {
         files.push({ name: d.name, dir: false, path: join(dir, d.name) });
     }
     const sort = (a, b) => a.name.localeCompare(b.name);
-    json(res, 200, { path: dir, parent: dir === '/' ? null : dirname(dir),
+    json(res, 200, { path: dir, parent: dirname(dir) === dir ? null : dirname(dir),
                      home: homedir(), entries: [...dirs.sort(sort), ...files.sort(sort)] });
   },
 
@@ -445,7 +450,7 @@ const routes = {
       if (!bin) return undefined;                 // not installed: nothing to start
       const up = await probeOai(base, '', 1200);
       if (up.ok) return up.models;
-      spawn(bin, args, { detached: true, stdio: 'ignore' }).unref();
+      spawn(bin, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
       for (let i = 0; i < 25; i++) {
         await sleep(400);
         const r = await probeOai(base, '', 1000);
@@ -511,7 +516,7 @@ const routes = {
     // Attachments go where the agent already works, and the message says where: both
     // runtimes can then open them with the file tools they have.
     let att = [];
-    try { att = await saveAttachments(scratch, attachments, join(ROOT, '.venv/bin/python')); }
+    try { att = await saveAttachments(scratch, attachments, join(ROOT, VENV_PY)); }
     catch (e) { return json(res, 400, { error: 'Could not save the attachment: ' + e.message }); }
     // history.md and the router get the question and the file names; only the agent gets the contents
     const said = !att.length ? message : message + '\n\n[attached: ' + att.map(f => f.path).join(', ') + ']';

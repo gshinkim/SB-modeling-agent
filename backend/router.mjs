@@ -5,7 +5,7 @@
    off, keyless, failing or slow, the turn runs exactly as it did without it. */
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Tellurium } from './tellurium.mjs';
+import { Tellurium, VENV_PY } from './tellurium.mjs';
 
 const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 // Pinned: the thresholds below are tuned against one version; "latest" can move under them.
@@ -35,7 +35,7 @@ export async function jev({ key, state, questions, signal, fetch: f = fetch }) {
 /** Layla over a warm Python worker (LAYLA_DIR/serve.py). Throws on any failure, like jev(). */
 let worker = null;
 export async function laya({ root, state, questions }) {
-  worker ??= new Tellurium(root, { python: join(root, LAYLA_DIR, '.venv/bin/python'),
+  worker ??= new Tellurium(root, { python: join(root, LAYLA_DIR, VENV_PY),
     script: join(root, LAYLA_DIR, 'serve.py'), name: 'Layla',
     missing: 'Layla is not set up: train it in ' + LAYLA_DIR });
   const r = await worker.call('predict', { state, questions }, LAYLA_TIMEOUT_MS);
@@ -110,7 +110,8 @@ export async function autoBlock(auto, root) {
   let out = '';
   for (const [name] of auto) {
     const md = await readFile(join(root, 'skills', name, 'SKILL.md'), 'utf8').catch(() => null);
-    if (md) out += `\n\n[router] The ${name} Skill is already loaded below; do not load it again.\n\n` + md;
+    if (md) out += `\n\n[router] The ${name} Skill's index is below; do not load it again. It is only the index: ` +
+      `open the reference files it points to before you rely on this Skill, as many of them and as often as you need.\n\n` + md;
   }
   return out;
 }

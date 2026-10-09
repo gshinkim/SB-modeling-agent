@@ -53,7 +53,7 @@ const CASES = [
 
   // a symlink inside runs/ that points out of it
   await mkdir(join(base, 'outside'), { recursive: true });
-  await symlink(join(base, 'outside'), join(runs, 'sneaky'), 'dir');
+  await symlink(join(base, 'outside'), join(runs, 'sneaky'), 'junction');
   await assert.rejects(() => sessionDir(runs, 'sneaky'), /outside/i, 'must reject escaping symlink');
 }
 

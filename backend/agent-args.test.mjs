@@ -1,6 +1,8 @@
 /* node backend/agent-args.test.mjs */
 import assert from 'node:assert/strict';
 import { buildArgs } from './agent.mjs';
+import { VENV_PY } from './tellurium.mjs';
+import { join } from 'node:path';
 
 const base = { root: '/tmp/app', prompt: 'hi', sid: 'abc-123', model: '',
                useWorkflow: true, liveModel: '', scratch: '', summary: '' };
@@ -37,7 +39,7 @@ const base = { root: '/tmp/app', prompt: 'hi', sid: 'abc-123', model: '',
   const args = buildArgs({ ...base, resuming: false });
   assert.ok(!args.includes('Bash(cat:*)'), 'Bash(cat:*) must not be allowed');
   assert.ok(!args.includes('Bash(ls:*)'), 'Bash(ls:*) must not be allowed');
-  assert.ok(args.includes('Bash(./.venv/bin/python:*)'), 'the venv python rule must stay');
+  assert.ok(args.includes(`Bash(./${VENV_PY}:*)`), 'the venv python rule must stay');
 }
 
 {
@@ -46,6 +48,12 @@ const base = { root: '/tmp/app', prompt: 'hi', sid: 'abc-123', model: '',
   const appended = withSummary[withSummary.indexOf('--append-system-prompt') + 1];
   assert.doesNotMatch(appended, /Treat it as established, and do not re-derive it\./);
   assert.match(appended, /not\s+a tool result/);
+}
+
+{
+  // the Skills are named by their real folder, not the .claude/skills link the CLI reports
+  const args = buildArgs({ ...base, resuming: false });
+  assert.ok(args[args.indexOf('--append-system-prompt') + 1].includes(join('/tmp/app', 'skills')));
 }
 
 console.log('agent args ok');

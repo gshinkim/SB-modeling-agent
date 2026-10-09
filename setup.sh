@@ -1,26 +1,36 @@
 #!/usr/bin/env bash
 # One-time setup: Node, a Python that Tellurium supports, the Python requirements,
-# and the .claude asset mirror.
+# and the .claude asset mirror. macOS, Linux, and Windows (run it from Git Bash).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
-  echo "Need Node.js 20 or newer (https://nodejs.org), e.g.  brew install node"
+  echo "Need Node.js 20 or newer: https://nodejs.org"
   exit 1
 fi
 
+# The version is asked of the interpreter, not read off its name: Windows has only
+# `python` and the `py` launcher, and `python` there can be the Store stub that runs nothing.
+# $c is left unquoted on purpose, "py -3.12" is a command and its argument.
 PY=""
-for c in python3.12 python3.11 python3.10; do command -v "$c" >/dev/null 2>&1 && { PY="$c"; break; }; done
+for c in python3.12 python3.11 python3.10 python3 python "py -3.12" "py -3.11" "py -3.10"; do
+  $c -c 'import sys; sys.exit(not (3,10) <= sys.version_info[:2] <= (3,12))' >/dev/null 2>&1 && { PY="$c"; break; }
+done
 if [ -z "$PY" ]; then
   echo "Need Python 3.10-3.12 for Tellurium (roadrunner has no wheels for 3.13+)."
-  echo "  brew install python@3.12"
+  echo "  macOS: brew install python@3.12    Ubuntu/Debian: sudo apt install python3.12 python3.12-venv"
+  echo "  Windows: winget install Python.Python.3.12"
   exit 1
 fi
 
-[ -d .venv ] || "$PY" -m venv .venv
-./.venv/bin/python -m pip install -q --upgrade pip
-./.venv/bin/python -m pip install -q -r requirements.txt
-./.venv/bin/python -c "import tellurium as te, pypdf; print('tellurium', te.__version__)"
+# A venv keeps its interpreter in Scripts/ on Windows and in bin/ everywhere else.
+venv_py() { [ -d "$1/Scripts" ] && echo "$1/Scripts/python" || echo "$1/bin/python"; }
+
+[ -d .venv ] || $PY -m venv .venv
+VPY="$(venv_py .venv)"
+"$VPY" -m pip install -q --upgrade pip
+"$VPY" -m pip install -q -r requirements.txt
+"$VPY" -c "import tellurium as te, pypdf; print('tellurium', te.__version__)"
 
 # Claude Code resolves agents/skills/workflows under .claude/. Symlinks, not copies,
 # so anything dropped into skills/ is live on the next agent turn. Recreated here
@@ -38,9 +48,10 @@ done
 LAYLA="Layla (altlernative to jev)"
 LAYLA_WEIGHTS="${LAYLA_WEIGHTS:-https://github.com/gshinkim/MCA-Agent/releases/download/layla-v1/layla-checkpoint.tar}"
 if [ "${SKIP_LAYLA:-}" != 1 ]; then
-  [ -d "$LAYLA/.venv" ] || "$PY" -m venv "$LAYLA/.venv"
-  "$LAYLA/.venv/bin/python" -m pip install -q --upgrade pip
-  "$LAYLA/.venv/bin/python" -m pip install -q laya==0.3.20
+  [ -d "$LAYLA/.venv" ] || $PY -m venv "$LAYLA/.venv"
+  LPY="$(venv_py "$LAYLA/.venv")"
+  "$LPY" -m pip install -q --upgrade pip
+  "$LPY" -m pip install -q laya==0.3.20
   if [ ! -f "$LAYLA/checkpoint/model.safetensors" ]; then
     echo "Downloading Layla's weights (about 800 MB)..."
     # a failed or cut-off download must not leave half a checkpoint that looks installed
@@ -50,5 +61,5 @@ if [ "${SKIP_LAYLA:-}" != 1 ]; then
 fi
 
 command -v claude >/dev/null 2>&1 || echo "NOTE: the 'claude' CLI is not on PATH, so the AI panel will not run yet.
-      Install it with:  npm install -g @anthropic-ai/claude-code   then run  claude  once to log in."
+      Install it (https://code.claude.com/docs/en/setup), then run  claude  once to log in."
 echo "Setup complete.  Start with:  ./run.sh"

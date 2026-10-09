@@ -398,7 +398,7 @@ else {
   const scratch = join(tmp, 'work'), out = join(tmp, 'outside');
   await mkdir(scratch); await mkdir(out);
   await writeFile(join(out, 'secret.txt'), 'TOP SECRET');
-  await symlink(out, join(scratch, 'link'));
+  await symlink(out, join(scratch, 'link'), 'junction');
   const bodies = [];
   const s10 = createServer((req, res) => {
     if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); return res.end(); }

@@ -2,11 +2,16 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
+// A venv keeps its interpreter in Scripts\ on Windows and in bin/ everywhere else.
+// Windows Python reads and writes pipes as cp1252 unless told otherwise; everything here is UTF-8.
+export const PY_ENV = { ...process.env, PYTHONUTF8: '1' };
+export const VENV_PY = process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python';
+
 // One warm Python process. `import tellurium` costs seconds; the UI runs on every
 // keystroke, so the process is started once and fed newline-delimited JSON.
 // The Layla Skill router (backend/router.mjs) reuses it with its own python and script.
 export class Tellurium {
-  constructor(root, { python = join(root, '.venv/bin/python'), script = join(root, 'backend/py/te_worker.py'),
+  constructor(root, { python = join(root, VENV_PY), script = join(root, 'backend/py/te_worker.py'),
                       name = 'Tellurium', missing = 'Tellurium is not installed. Run: bash setup.sh' } = {}) {
     this.root = root;
     this.python = python; this.script = script; this.name = name; this.missing = missing;
@@ -18,7 +23,7 @@ export class Tellurium {
 
   start() {
     if (this.proc || !this.installed) return;
-    const p = spawn(this.python, [this.script], { cwd: this.root, stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn(this.python, [this.script], { cwd: this.root, env: PY_ENV, stdio: ['pipe', 'pipe', 'pipe'] });
     p.stdout.setEncoding('utf8');
     p.stdout.on('data', d => {
       this.buf += d;

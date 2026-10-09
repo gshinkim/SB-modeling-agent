@@ -28,7 +28,8 @@ const on = { enabled: true, key: 'sk-test', auto: true };
   assert.equal(hintLine([['tellurium', 0.912], ['mca', 0.74]]),
     '\n\n[router] likely needed: tellurium (0.91), mca (0.74). Load with load_skill / Skill.');
   const block = await autoBlock([['tellurium', 0.9]], ROOT);
-  assert.match(block, /The tellurium Skill is already loaded/);
+  assert.match(block, /The tellurium Skill's index is below; do not load it again/);
+  assert.match(block, /open the reference files/, 'an inlined index must not pass for a used Skill');
   assert.match(block, /name: tellurium/);
   assert.equal(logLine({ ms: 231, hint: [['tellurium', 0.91]], auto: [] }),
     'router 231ms: hint tellurium 0.91 | auto none');

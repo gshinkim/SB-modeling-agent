@@ -12,6 +12,7 @@ import { forHistory, toolRunner, toolResult, readCompletion, fitMessages, result
 import { localSystem } from '../web/js/prompt.mjs';
 import { logLine, hintLine, recentLine, failed } from './router.mjs';
 import { pdfText, asText } from './files.mjs';
+import { VENV_PY, PY_ENV } from './tellurium.mjs';
 
 /* A second agent runtime for models that are not Claude Code: anything speaking
    OpenAI-compatible /v1/chat/completions (Ollama, LM Studio, llama-server, a GGUF
@@ -265,7 +266,7 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
       throw new Error('path escapes the project and the working folder: ' + p);
     return abs;
   };
-  const py = join(root, '.venv/bin/python');
+  const py = join(root, VENV_PY);
 
   const impl = {
     async load_skill({ name }) {
@@ -332,7 +333,7 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
       return await new Promise(res => {
         // cwd is the scratch folder, so anything the script writes by a relative
         // path lands with the user's other work rather than in the install
-        execFile(py, [file], { cwd: scratch, timeout: 180000, maxBuffer: 8e6 },
+        execFile(py, [file], { cwd: scratch, env: PY_ENV, timeout: 180000, maxBuffer: 8e6 },
           (err, out, errOut) => res(
             ((out || '') + (errOut ? '\n[stderr]\n' + errOut : '') +
              (err && !out && !errOut ? '\n[failed] ' + err.message : '') || '(no output)')

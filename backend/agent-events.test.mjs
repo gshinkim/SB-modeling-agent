@@ -1,7 +1,7 @@
 /* node backend/agent-events.test.mjs
    toUiEvent: the Claude CLI's stream-json -> the event shapes the UI renders. */
 import assert from 'node:assert/strict';
-import { toUiEvent } from './agent.mjs';
+import { toUiEvent, runAgent } from './agent.mjs';
 
 const msg = (type, ...content) => ({ type, message: { content } });
 for (const [raw, want] of [
@@ -10,6 +10,9 @@ for (const [raw, want] of [
   [{ type: 'system', subtype: 'init', model: 'm', tools: ['Read'], agents: ['a'], session_id: 's' },
    { type: 'init', model: 'm', tools: ['Read'], agents: ['a'], sessionId: 's' }],
   [{ type: 'system', subtype: 'other' }, null],
+  [{ type: 'system', subtype: 'task_progress', description: 'MCA frame: mca:frame', last_tool_name: 'mca:frame' },
+   { type: 'phase', phase: 'MCA frame', label: 'mca:frame' }],
+  [{ type: 'system', subtype: 'task_progress', description: 'Run a script', last_tool_name: 'Bash' }, null],
   [{ type: 'stream_event', event: { delta: { type: 'text_delta', text: 'hi' } } }, { type: 'delta', text: 'hi' }],
   [{ type: 'stream_event', event: { delta: { type: 'thinking_delta', thinking: 'hm' } } }, { type: 'thinking', text: 'hm' }],
   [{ type: 'stream_event', event: { type: 'message_stop' } }, null],
@@ -24,4 +27,18 @@ for (const [raw, want] of [
    { type: 'result', text: 'ans', isError: false, ms: 5, cost: 0.1, turns: 2 }],
   [{ type: 'rate_limit_event' }, null],
 ]) assert.deepEqual(toUiEvent(raw), want, JSON.stringify(raw));
+
+{
+  // A Skill the router puts in the prompt is loaded all the same, and must show as one:
+  // the CLI is told not to load it again, so no Skill tool call will ever announce it.
+  const seen = [];
+  await new Promise(done => {
+    const run = runAgent({ root: process.cwd(), prompt: 'q',
+      router: async () => ({ ms: 1, hint: [], auto: [['mca', 0.9]] }),
+      onEvent: ev => { seen.push(ev); if (ev.type === 'log') run.kill();    // stop before the CLI starts
+                       if (ev.type === 'done') done(); } });
+  });
+  assert.deepEqual(seen.find(e => e.type === 'tools'),
+    { type: 'tools', tools: [{ name: 'load_skill', input: { name: 'mca', by: 'router' } }] });
+}
 console.log('agent-events.test.mjs ok');

@@ -28,7 +28,7 @@ await writeFile(join(root, 'plot.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 await writeFile(join(root, '.git', 'config.txt'), 'hidden');
 await writeFile(join(root, '.env'), 'hidden');
 await writeFile(join(root, '__pycache__', 'x.py'), 'cache');
-await symlink(outside, join(root, 'link'));                       // dir symlink out of the root
+await symlink(outside, join(root, 'link'), 'junction');                       // dir symlink out of the root
 await symlink(join(outside, 'secret.txt'), join(root, 'leak.txt')); // file symlink out
 await symlink(join(outside, 'not-there.txt'), join(root, 'dangling.txt'));
 // newest first is by mtime
@@ -190,14 +190,14 @@ test('attachments: saved by plain name, never over a file; text and PDF text sho
   const xref = pdf.length;
   pdf += 'xref\n0 6\n0000000000 65535 f \n' + at.map(n => String(n).padStart(10, '0') + ' 00000 n \n').join('') +
          `trailer<</Size 6/Root 1 0 R>>\nstartxref\n${xref}\n%%EOF`;
-  const py = join(fileURLToPath(new URL('..', import.meta.url)), '.venv/bin/python');
+  const py = join(fileURLToPath(new URL('..', import.meta.url)), process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python');
   const got = await saveAttachments(r, [
     { name: '../../etc/passwd', type: 'text/plain', data: b64('one') },
     { name: 'passwd', type: 'text/plain', data: b64('two') },
     { name: '..', type: '', data: Buffer.from([1, 0, 2]).toString('base64') },
     { name: 'gel photo.png', type: 'image/png', data: b64('png') },
     { name: 'paper.pdf', type: 'application/pdf', data: b64(pdf) }], py);
-  assert.deepEqual(got.map(f => [relative(r, f.path), f.kind]), [['attachments/passwd', 'text'], ['attachments/2-passwd', 'text'],
+  assert.deepEqual(got.map(f => [relative(r, f.path).replaceAll('\\', '/'), f.kind]), [['attachments/passwd', 'text'], ['attachments/2-passwd', 'text'],
     ['attachments/file', 'binary'], ['attachments/gel photo.png', 'image'], ['attachments/paper.pdf', 'pdf']]);
   assert.equal(await readFile(got[1].path, 'utf8'), 'two');
   assert.equal(got[3].url, 'data:image/png;base64,' + b64('png'));

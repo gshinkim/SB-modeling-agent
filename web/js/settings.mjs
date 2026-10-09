@@ -12,11 +12,9 @@ import { BUDGET, BUDGET_LIMITS, CONTEXT_DEFAULT, replyTokens, resultCap,
                    a gateway). The backend runs workflows/mca-tellurium.js itself
                    against that endpoint, so a plain GGUF drives the same workflow. */
 
-const BUILTIN = [
-  { id:'opus',   t:'Claude Opus 5' },
-  { id:'sonnet', t:'Claude Sonnet 5' },
-  { id:'haiku',  t:'Claude Haiku 4.5' },
-];
+// One entry, no model id: the turn is sent without --model, so the CLI uses whatever
+// model the user's own Claude Code is set to.
+const BUILTIN = [{ id:'', t:'Claude (default to your CLI)' }];
 const DEF = { endpoints: [], useWorkflow: true, scratchDir: '', budget: { ...BUDGET },
   router: { enabled: false, provider: 'laya', key: '', auto: false }, localCfg:{
   olUrl:'http://localhost:11434', lmUrl:'http://localhost:1234', ggufPath:'', ggufUrl:'http://localhost:8080' } };
@@ -54,13 +52,13 @@ const noSlash = u => String(u || '').replace(/\/+$/, '');
 export function resolveModel(sel){
   const s = settings();
   if(!sel || sel.startsWith('cc:'))
-    return { runtime:'claude-code', model: sel ? sel.slice(3) : 'opus' };
+    return { runtime:'claude-code', model:'' };
   const [kind, ...rest] = sel.split(':');
   const model = rest.join(':');
   // 'auto:<baseUrl>|<model>' — a runtime found by /api/local/scan, nothing saved
   if(kind==='auto'){
     const i = model.lastIndexOf('|');
-    if (i < 0) return { runtime:'claude-code', model:'opus' };
+    if (i < 0) return { runtime:'claude-code', model:'' };
     const baseUrl = model.slice(0,i), name = model.slice(i+1);
     // if this scanned server is also configured on the Local models tab, use the
     // context window set there instead of the server default
@@ -77,9 +75,9 @@ export function resolveModel(sel){
     const ep = s.endpoints.find(e => e.base === model.slice(0, i));
     return ep ? { runtime:'openai', chatCfg:{ baseUrl: ep.base, apiKey: ep.key, model: model.slice(i+1),
                                               contextTokens: +ep.ctx || undefined, ...s.budget } }
-              : { runtime:'claude-code', model:'opus' };
+              : { runtime:'claude-code', model:'' };
   }
-  return { runtime:'claude-code', model:'opus' };
+  return { runtime:'claude-code', model:'' };
 }
 
 export function modelOptions(){
@@ -101,7 +99,7 @@ export function modelOptions(){
     .forEach(m => out.push({ v:L.id+':'+m, t:L.label+' · '+m })));
   // a GGUF path with no served id: the server names it, so fall back to the filename
   if(!(local.ggufModels||'').trim() && local.ggufPath){
-    const f = local.ggufPath.split('/').pop();
+    const f = local.ggufPath.split(/[\\/]/).pop();
     out.push({ v:'gguf:'+f, t:'GGUF · '+f });
   }
   // two servers can serve a model of the same name; keep the first, drop exact dupes
@@ -111,7 +109,7 @@ export function modelOptions(){
 
 export function fillModels(){
   const opts=modelOptions();
-  let cur=store.get('modelSel','cc:opus');
+  let cur=store.get('modelSel','cc:');
   // selections saved before endpoints were keyed by URL: ep:<index>|<model>
   const old=/^ep:(\d+)\|(.*)$/.exec(cur), ep=old && settings().endpoints[+old[1]];
   if(ep){ cur='ep:'+ep.base+'|'+old[2]; store.set('modelSel', cur); }

@@ -296,7 +296,7 @@ function send(){
   attached = []; renderAttached();
   $('#ask').value=''; $('#ask').style.height='auto';
 
-  const rt  = resolveModel(store.get('modelSel','cc:opus'));
+  const rt  = resolveModel(store.get('modelSel','cc:'));
   const ui = turnUi(c, v);
 
   if(rt.runtime === 'openai' && S.env?.hosted){

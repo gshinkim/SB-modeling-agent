@@ -163,7 +163,7 @@ export const ATTACH_TEXT = 60000;       // characters of one attachment shown in
 /** A PDF's text, page by page. Throws when pypdf is missing or the file is not a PDF. */
 export const pdfText = (py, path) => new Promise((ok, no) => execFile(py, ['-c',
   'import sys, pypdf\nfor i, p in enumerate(pypdf.PdfReader(sys.argv[1]).pages):\n    print("--- page %d ---" % (i + 1)); print(p.extract_text() or "")',
-  path], { timeout: 60000, maxBuffer: 64e6 }, (e, out, err) => e ? no(new Error(String(err || e.message).trim().split('\n').pop())) : ok(out)));
+  path], { env: { ...process.env, PYTHONUTF8: '1' }, timeout: 60000, maxBuffer: 64e6 }, (e, out, err) => e ? no(new Error(String(err || e.message).trim().split('\n').pop())) : ok(out)));
 /** Text a model can read, or null: a file with a NUL byte in it is not text. */
 export const asText = buf => buf.includes(0) ? null : buf.toString('utf8');
 

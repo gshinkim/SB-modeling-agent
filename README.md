@@ -6,25 +6,62 @@ read, edit, run and analyse the model the same way you can.
 
 ## Install and run
 
-You need:
+Runs on macOS, Linux and Windows. You need Git, Node.js 20+, Python 3.10–3.12
+(not 3.13: roadrunner has no wheels for it), and Claude Code for the AI panel. The
+rest of the app works without Claude Code.
 
-- **Git** and **Node.js 20+** (`brew install node`, or from nodejs.org)
-- **Python 3.10–3.12** (`brew install python@3.12`)
-- **Claude Code**, for the AI panel: `npm install -g @anthropic-ai/claude-code`, then run
-  `claude` once and log in. The rest of the app works without it.
+| | macOS | Linux (Debian/Ubuntu) | Windows |
+|---|---|---|---|
+| Git | `xcode-select --install` | `sudo apt install git curl` | `winget install Git.Git` |
+| Node.js 20+ | `brew install node` | [nodejs.org](https://nodejs.org) or your package manager | `winget install OpenJS.NodeJS.LTS` |
+| Python | `brew install python@3.12` | `sudo apt install python3.12 python3.12-venv` | `winget install Python.Python.3.12` |
+| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` | `curl -fsSL https://claude.ai/install.sh \| bash` | PowerShell: `irm https://claude.ai/install.ps1 \| iex` |
 
-Then:
+Run `claude` once and log in.
+
+Then, in a terminal (**on Windows: Git Bash**, which Git for Windows installs, not
+PowerShell or cmd):
 
 ```bash
 git clone https://github.com/gshinkim/MCA-Agent.git
 cd MCA-Agent
-./setup.sh     # once: Python venv, Tellurium, the Layla router and its weights
-./run.sh       # open http://127.0.0.1:5173
+bash setup.sh     # once: Python venv, Tellurium, the Layla router and its weights
+bash run.sh       # open http://127.0.0.1:5173
 ```
+
+Windows notes:
+
+- Install Claude Code with the native installer above, not `npm install -g`. npm
+  installs a `claude.cmd` shim, which the app cannot start; the installer gives
+  `claude.exe`.
+- Open a new Git Bash window after installing anything, so it is on `PATH`.
+- `.claude/{agents,skills,workflows}` are copies on Windows, not symlinks. After
+  adding or editing a Skill, rerun `bash setup.sh` to refresh them.
+- WSL2 also works; inside it, follow the Linux column.
 
 `setup.sh` takes several minutes and several GB on first run (PyTorch and the router
 weights are the bulk). `SKIP_LAYLA=1 ./setup.sh` skips the router; the app then uses
 Jev, or no router at all. Rerunning `setup.sh` is safe.
+
+### Updating
+
+Same on all three systems (Windows: in Git Bash):
+
+```bash
+git pull
+bash setup.sh     # safe to rerun: picks up new requirements, refreshes .claude/
+bash run.sh
+```
+
+To update the tools themselves:
+
+| | macOS | Linux (Debian/Ubuntu) | Windows |
+|---|---|---|---|
+| Claude Code | `claude update` | `claude update` | `claude update` |
+| Node.js | `brew upgrade node` | your package manager | `winget upgrade OpenJS.NodeJS.LTS` |
+| Python | stay on 3.10–3.12 | stay on 3.10–3.12 | stay on 3.10–3.12 |
+
+If you change the Python version, delete `.venv` and rerun `bash setup.sh`.
 
 ## How it fits together
 
@@ -91,7 +128,9 @@ available, with Bash and the real `Workflow` tool.
 
 ### Two agent runtimes, one workflow
 
-Pick the model in the bar under the plot. Both run **the same**
+Pick the model in the bar under the plot. **Claude (default to your CLI)** sends the
+turn with no `--model`, so it uses whatever model your own Claude Code is set to
+(change it there with `/model`). Both runtimes run **the same**
 `workflows/mca-tellurium.js` and the same `agents/model-scientist.md`.
 
 **`claude-code`** — spawns `claude -p --agent model-scientist` with
@@ -133,7 +172,8 @@ withheld from the CLI (`--settings '{"enableWorkflows":false}'` and dropped from
 agent cannot quietly take the slow path anyway.
 
 `.claude/{agents,skills,workflows}` are symlinks, so anything you drop into
-`skills/` is live on the next turn — no restart, no copy step.
+`skills/` is live on the next turn — no restart, no copy step (on Windows they are
+copies: rerun `bash setup.sh`).
 
 ### Using a local model
 
@@ -175,7 +215,7 @@ A `.gguf` file is weights, not a server — serve it first
 (`llama-server -m <file> --port 8080`, or `lms load <file>`) and point the URL at it.
 
 **Permissions are scoped, not bypassed.** The agent may run the project's own
-`./.venv/bin/python` and read/edit files in the project. Nothing else is allowed;
+`./.venv/bin/python` (`./.venv/Scripts/python.exe` on Windows) and read/edit files in the project. Nothing else is allowed;
 widen the `--allowedTools` list in `backend/agent.mjs` deliberately.
 
 ## Everything numeric is Tellurium
