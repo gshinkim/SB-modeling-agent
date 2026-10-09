@@ -13,7 +13,7 @@ import { startLive, watchLive, liveMeta, stopLive } from './live.mjs';
 import { jev, laya, questions } from './router.mjs';
 import { homedir } from 'node:os';
 import { listSessions, saveSession, openSession, deleteSession,
-         sessionDir, readHistory, compactPrompt, parseHistory } from './sessions.mjs';
+         sessionDir, readHistory, compactPrompt, thinkingPrompt, parseHistory } from './sessions.mjs';
 import { rootFor, listFiles, readText, openRaw, writeText, deleteFile, searchFiles, saveAttachments, attachmentNote } from './files.mjs';
 
 const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), '..'));
@@ -51,10 +51,10 @@ async function body(req, limit = 4e6) {
   catch { throw new Error('invalid JSON body'); }
 }
 
-/* One history.md fold: ~1000 words -> ~200, by the model the user is already using.
+/* One history.md summary (the fold: ~1000 words -> ~200; or one turn's thinking), by
+   the model the user is already using.
    Claude Code has no plain completion endpoint, so it gets a one-shot `claude -p`. */
-async function compactWith({ runtime, chatCfg, model }, summary, batch) {
-  const [sys, user] = compactPrompt(summary, batch);
+async function compactWith({ runtime, chatCfg, model }, [sys, user]) {
   // No maxTokens: the reply budget covers thinking too, and at 800 a thinking model
   // spent it all thinking — measured: bonsai-27b failed every fold (and the cutoff
   // retry) this way and history.md grew to 3,688 words. Uncapped it thought ~1,500
@@ -534,7 +534,8 @@ const routes = {
       root: ROOT, sdir, mfile, scratch, message: said, ask, routerCfg, runtime, editorEcho, emit,
       agent: runtime === 'openai' ? runLocalAgent : runAgent,
       args: { sessionId, model, env: env || {}, chatCfg, useWorkflow, resume, te, images: att.filter(f => f.kind === 'image').map(f => f.url) },
-      compact: (sum, batch) => compactWith({ runtime, chatCfg, model }, sum, batch),
+      compact: (sum, batch) => compactWith({ runtime, chatCfg, model }, compactPrompt(sum, batch)),
+      shorten: thinking => compactWith({ runtime, chatCfg, model }, thinkingPrompt(thinking)),
       end: () => { awake?.kill(); end(); } }));
     follow(res, key);
   },

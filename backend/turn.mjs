@@ -7,7 +7,7 @@ import { watch } from 'node:fs';
 import { dirname, relative } from 'node:path';
 import { SKILL_NOTE } from '../web/js/prompt.mjs';
 import { route, active } from './router.mjs';
-import { readHistory, appendHistory, compressHistory, holdDir, turnLines } from './sessions.mjs';
+import { readHistory, appendHistory, compressHistory, summariseThinking, holdDir, turnLines } from './sessions.mjs';
 
 export const modelVersion = async file => { try { return (await stat(file)).mtimeMs; } catch { return 0; } };
 
@@ -15,7 +15,7 @@ export const modelVersion = async file => { try { return (await stat(file)).mtim
     the project's folder (null outside a project) and `mfile` its live model. Events go
     to `emit`, `end` is called once the turn's history is on disk. Returns stop(). */
 export function runTurn({ root, sdir, mfile, scratch, message, ask, routerCfg, runtime, agent, args,
-                          compact, editorEcho, emit: send, end }) {
+                          compact, shorten, editorEcho, emit: send, end }) {
   let run = null, stopped = false, watcher = null;
   const unwatch = () => { watcher?.close(); watcher = null; };
 
@@ -75,13 +75,16 @@ export function runTurn({ root, sdir, mfile, scratch, message, ask, routerCfg, r
           await pushModel();
 
           /* Persisting memory must never fail the turn. Every turn that ends — answered,
-             cut off, failed or stopped — is written at once; the fold then runs in the
-             background, so neither the chat nor the next turn waits for the model. */
+             cut off, failed or stopped — is written at once; the thinking summary and the
+             fold then run in the background, so neither the chat nor the next turn waits for the model. */
           if (sdir) try {
             await appendHistory(sdir, turnLines(message, thoughts, answer));
           } catch (e) { console.error('[history]', e.message); }
           await release();
-          if (sdir) compressHistory(sdir, compact)
+          // One after the other, not both at once: a local server has one GPU.
+          if (sdir) summariseThinking(sdir, thoughts, shorten)
+            .catch(e => console.error('[history thinking]', e.message))
+            .then(() => compressHistory(sdir, compact))
             .catch(e => console.error('[history fold]', e.message));
 
           end();

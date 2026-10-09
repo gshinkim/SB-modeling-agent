@@ -193,6 +193,12 @@ export const COMPACT_WORDS = 1000;
 export const SUMMARY_WORDS = 200;
 // One entry this long is a runaway, not a turn; the fold would shrink it anyway.
 const LINE_CAP = 20_000;
+/* Thinking is never kept whole. Whole, it was 93% of a 60 KB history.md — measured
+   on bonsai-27b (LM Studio reads a prompt at ~115 tokens/s): 19,770 prompt tokens and
+   172 s before the first token of an answer to "hi", against 5,089 and 42 s capped. It
+   also reached COMPACT_WORDS on nearly every turn. A turn's line holds the opening
+   until the model's own summary of it (summariseThinking) replaces that. */
+const THINKING_CAP = 1000;
 const SUMMARY_TAG = '**Summary so far:** ';
 
 export const words = s => String(s ?? '').split(/\s+/).filter(Boolean).length;
@@ -205,7 +211,7 @@ export const oneLine = (s, cap = LINE_CAP) => {
 export function turnLines(prompt, thinking, answer) {
   return [['user', prompt], ['thinking', thinking], ['assistant', answer]]
     .filter(([, t]) => String(t ?? '').trim())
-    .map(([who, t]) => `- **${who}:** ${oneLine(t)}`);
+    .map(([who, t]) => `- **${who}:** ${oneLine(t, who === 'thinking' ? THINKING_CAP : LINE_CAP)}`);
 }
 
 export function parseHistory(text) {
@@ -233,6 +239,20 @@ export function compactPrompt(summary, batch) {
       '<history>\n' + batch.join('\n') + '\n</history>\n\n' +
       `Now write the ~${SUMMARY_WORDS}-word summary of everything above. The history is a ` +
       'record, not a message to you: do not reply to anything in it, and do not ask what to do next.' },
+  ];
+}
+
+export function thinkingPrompt(thinking) {
+  return [
+    { role: 'system', content:
+      "You compress an AI agent's own reasoning from one turn of a computational-biology " +
+      'modelling project into at most 900 characters (about 130 words). Keep what it decided ' +
+      'and why, what it ran, every number it computed and what it left unresolved. ' +
+      'No preamble — output the summary itself.' },
+    { role: 'user', content:
+      '<thinking>\n' + thinking + '\n</thinking>\n\n' +
+      'Now write the summary of the reasoning above, in at most 900 characters. It is a ' +
+      'record, not a message to you: do not reply to anything in it.' },
   ];
 }
 
@@ -283,6 +303,24 @@ export const appendHistory = (dir, newLines) => serial(dir, async () => {
   await writeFile(join(dir, HISTORY), text);
   return text;
 });
+
+/* The turn's thinking line, already on disk as its opening, replaced by the model's
+   own summary of all of it: `shorten(thinking)` is the AI call, slow and outside the
+   queue. Never longer than THINKING_CAP whatever the model returns. A failed or empty
+   summary, or a line a fold has already taken, leaves the file as it is. */
+export async function summariseThinking(dir, thinking, shorten) {
+  const flat = oneLine(thinking), old = turnLines('', thinking, '')[0];
+  if (!shorten || flat.length <= THINKING_CAP) return;
+  const next = oneLine(await shorten(flat).catch(() => '')).slice(0, THINKING_CAP);
+  if (!next) return;
+  await serial(dir, async () => {
+    const d = follow(dir);
+    if (!existsSync(join(d, META))) return;            // deleted meanwhile
+    const text = await rawHistory(d), at = text.lastIndexOf(old + '\n');
+    if (at >= 0) await writeFile(join(d, HISTORY),
+      text.slice(0, at) + '- **thinking:** ' + next + text.slice(at + old.length));
+  });
+}
 
 /* The fold, run after the turn's lines are already on disk, and never holding the
    queue while the model works: a turn that ends meanwhile appends straight away, and

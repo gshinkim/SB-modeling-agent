@@ -218,6 +218,27 @@ console.log('sessions rename retry ok');
   assert.equal(turnLines('q', '', 'a').length, 2);
   // a long answer is kept whole — the fold shrinks history, not a per-line cut
   assert.ok(turnLines('q', '', 'w '.repeat(3000))[1].length > 5000);
+  // ...but thinking keeps only its opening: whole, it was most of the prompt every later turn re-read
+  assert.ok(turnLines('q', 'w '.repeat(3000), 'a')[1].length < 1100);
+
+  // ...until the model's own summary of it replaces that opening, never past 1000 characters
+  {
+    const { summariseThinking } = await import('./sessions.mjs');
+    const d = await mkdtemp(join(tmpdir(), 'think-'));
+    await wf2(join(d, 'session.json'), JSON.stringify({ name: 't', chats: [] }));
+    const long = 'w '.repeat(3000);
+    await appendHistory(d, turnLines('q', long, 'a'));
+    const before = await rf(join(d, HISTORY), 'utf8');
+    await summariseThinking(d, long, async () => { throw new Error('model down'); });
+    assert.equal(await rf(join(d, HISTORY), 'utf8'), before);          // a failure changes nothing
+    await summariseThinking(d, long, async () => 'S '.repeat(900));
+    const [q, t, a] = parseHistory(await rf(join(d, HISTORY), 'utf8')).lines;
+    assert.ok(t.startsWith('- **thinking:** S S') && t.length <= 1000 + '- **thinking:** '.length);
+    assert.deepEqual([q, a], ['- **user:** q', '- **assistant:** a']);
+    let asked = false;                                                  // short thinking: no model call
+    await summariseThinking(d, 'short', async () => { asked = true; return 'x'; });
+    assert.equal(asked, false);
+  }
 
   // the file round-trips
   const h = { summary: 'S', lines: ['- **user:** a', '- **assistant:** b'] };
