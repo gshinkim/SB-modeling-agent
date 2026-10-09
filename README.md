@@ -19,8 +19,7 @@ rest of the app works without Claude Code.
 
 Run `claude` once and log in.
 
-Then, in a terminal (**on Windows: Git Bash**, which Git for Windows installs, not
-PowerShell or cmd):
+Then, on macOS or Linux:
 
 ```bash
 git clone https://github.com/gshinkim/MCA-Agent.git
@@ -29,14 +28,26 @@ bash setup.sh     # once: Python venv, Tellurium, the Layla router and its weigh
 bash run.sh       # open http://127.0.0.1:5173
 ```
 
+On Windows, in PowerShell or cmd:
+
+```powershell
+git clone https://github.com/gshinkim/MCA-Agent.git
+cd MCA-Agent
+.\setup.cmd       # once
+.\run.cmd         # open http://127.0.0.1:5173
+```
+
+Do not type `bash setup.sh` in PowerShell or cmd: `bash` there is the WSL launcher,
+not Git Bash. `setup.cmd` finds Git's own bash and runs `setup.sh` with it.
+
 Windows notes:
 
 - Install Claude Code with the native installer above, not `npm install -g`. npm
   installs a `claude.cmd` shim, which the app cannot start; the installer gives
   `claude.exe`.
-- Open a new Git Bash window after installing anything, so it is on `PATH`.
+- Open a new terminal after installing anything, so it is on `PATH`.
 - `.claude/{agents,skills,workflows}` are copies on Windows, not symlinks. After
-  adding or editing a Skill, rerun `bash setup.sh` to refresh them.
+  adding or editing a Skill, rerun `.\setup.cmd` to refresh them.
 - WSL2 also works; inside it, follow the Linux column.
 
 `setup.sh` takes several minutes and several GB on first run (PyTorch and the router
@@ -45,13 +56,13 @@ Jev, or no router at all. Rerunning `setup.sh` is safe.
 
 ### Updating
 
-Same on all three systems (Windows: in Git Bash):
-
 ```bash
 git pull
 bash setup.sh     # safe to rerun: picks up new requirements, refreshes .claude/
 bash run.sh
 ```
+
+On Windows: `git pull`, then `.\setup.cmd`, then `.\run.cmd`.
 
 To update the tools themselves:
 
@@ -173,7 +184,7 @@ agent cannot quietly take the slow path anyway.
 
 `.claude/{agents,skills,workflows}` are symlinks, so anything you drop into
 `skills/` is live on the next turn — no restart, no copy step (on Windows they are
-copies: rerun `bash setup.sh`).
+copies: rerun `.\setup.cmd`).
 
 ### Using a local model
 
