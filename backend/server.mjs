@@ -1,19 +1,20 @@
 import { createServer } from 'node:http';
 import { readFile, writeFile, mkdir, stat, readdir, access } from 'node:fs/promises';
 import { constants as FS } from 'node:fs';
-import { existsSync, watch } from 'node:fs';
-import { join, extname, normalize, dirname, relative, sep } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, extname, normalize, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
 import { Tellurium } from './tellurium.mjs';
-import { runAgent, toUiEvent } from './agent.mjs';
+import { runAgent } from './agent.mjs';
 import { runLocalAgent, Chat } from './local-agent.mjs';
-import { SKILL_NOTE } from '../web/js/prompt.mjs';
-import { route, jev, laya, active, questions, logLine, hintLine, autoBlock } from './router.mjs';
+import { runTurn, modelVersion } from './turn.mjs';
+import { startLive, watchLive, liveMeta, stopLive } from './live.mjs';
+import { jev, laya, questions } from './router.mjs';
 import { homedir } from 'node:os';
 import { listSessions, saveSession, openSession, deleteSession,
-         sessionDir, readHistory, appendHistory, compressHistory, holdDir, turnLines,
-         compactPrompt } from './sessions.mjs';
+         sessionDir, readHistory, compactPrompt, parseHistory } from './sessions.mjs';
+import { rootFor, listFiles, readText, openRaw, writeText, deleteFile, searchFiles, saveAttachments, attachmentNote } from './files.mjs';
 
 const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const WEB = join(ROOT, 'web');
@@ -29,18 +30,7 @@ const HOSTED = process.env.MCA_HOSTED === '1';
 
 const te = new Tellurium(ROOT);
 
-const DEFAULT_MODEL = `// Linear pathway — the classic MCA test case
-$Xo -> S1;  k1*Xo - k2*S1
- S1 -> S2;  k3*S1 - k4*S2
- S2 -> $X1; k5*S2
-
-Xo = 10;  X1 = 0
-S1 = 0;   S2 = 0
-
-k1 = 0.5;  k2 = 0.1
-k3 = 0.4;  k4 = 0.1
-k5 = 0.3
-`;
+const DEFAULT_MODEL = '';   // a project starts with no model: the user writes, imports or asks for one
 
 const MIME = { '.md': 'text/markdown; charset=utf-8', '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -111,20 +101,14 @@ async function resolveScratch(dir) {
   await access(p, FS.W_OK).catch(() => { throw new Error('cannot write to: ' + p); });
   return p;
 }
+// The one answer to "which folder does this request mean" (files.mjs rootFor), bound once.
+const folder = q => rootFor(q, { work: WORK, runs: RUNS, resolveScratch });
 
 /* A project's model lives in its own folder: the editor, the agent and its Python
    all read and write workspace/<project>/model.txt. workspace/model.txt is only the
    default, for the page before any project exists. The browser names the project
    on every call rather than the server remembering which one is open. */
-const modelFile = async project => {
-  if (!project) return MODEL_FILE;
-  let dir;
-  try { dir = await sessionDir(WORK, project); }
-  catch (e) { e.status ??= 400; throw e; }
-  if (!existsSync(join(dir, 'session.json')))
-    throw Object.assign(new Error('no such project: ' + project), { status: 400 });
-  return join(dir, 'model.txt');
-};
+const modelFile = async project => project ? join(await folder({ project }), 'model.txt') : MODEL_FILE;
 // What the editor itself last wrote, per file: the turn's watcher must not echo the
 // user's own edits back (a stale echo would snap a dragged slider back). Only a
 // *recent* write counts — an old one must not suppress a later AI write that
@@ -137,7 +121,6 @@ const noteEditorWrite = (file, src) => {
 };
 const editorEcho = (file, src) =>
   (editorWrote.get(file) ?? []).some(w => w.src === src && Date.now() - w.t < 5000);
-const modelVersion = async (file = MODEL_FILE) => { try { return (await stat(file)).mtimeMs; } catch { return 0; } };
 
 const which = cmd => new Promise(r =>
   execFile('sh', ['-lc', `command -v ${cmd}`], (e, out) => r(e ? null : out.trim())));
@@ -181,6 +164,10 @@ const KNOWN = [
 const hostOf = u => String(u || '').replace(/\/v\d+\/?$/, '').replace(/\/+$/, '').replace('//localhost', '//127.0.0.1');
 const LMSTUDIO = KNOWN.find(k => k.kind === 'LM Studio').base;
 async function ejectOthers(keepBase = '', keepModel = '') {
+  // The test suite starts this server against a stub model, and "every other model"
+  // was then the user's real one: it was unloaded mid-turn (measured 2026-10-08, three
+  // times). A test server must never reach the real LM Studio or Ollama.
+  if (process.env.MCA_NO_EJECT === '1') return [];
   const keep = (base, ...names) => hostOf(keepBase) === base &&
     names.some(n => n === keepModel || n === keepModel + ':latest');
   const call = (url, body) => fetch(url, { method: body ? 'POST' : 'GET', signal: AbortSignal.timeout(3000),
@@ -293,6 +280,19 @@ const routes = {
   'POST /api/settle': async (req, res) => json(res, 200, await te.call('settle', await body(req), 120000)),
   'POST /api/mca':    async (req, res) => json(res, 200, await te.call('mca', await body(req), 120000)),
 
+  /* An imported file becomes Antimony: SBML is converted by Tellurium. */
+  'POST /api/convert': async (req, res) => json(res, 200, await te.call('antimony', await body(req))),
+
+  /* The project's memory (history.md), for the History pane. */
+  'GET /api/history': async (req, res) => {
+    if (HOSTED) return json(res, 200, { summary: '', lines: [] });
+    const project = new URL(req.url, 'http://x').searchParams.get('project');
+    if (!project) return json(res, 200, { summary: '', lines: [] });
+    let dir;
+    try { dir = await sessionDir(WORK, project); } catch (e) { return json(res, 400, { error: e.message }); }
+    json(res, 200, parseHistory(await readHistory(dir)));
+  },
+
   /* Directory listing for the local-model file picker. The browser cannot give a
      real path from <input type=file>, so the server browses instead. */
   'GET /api/fs': async (req, res) => {
@@ -360,6 +360,49 @@ const routes = {
     const { id } = await body(req);
     try { await deleteSession(WORK, id); json(res, 200, { ok: true }); }
     catch (e) { json(res, 400, { error: String(e.message || e) }); }
+  },
+
+  /* Files and Search views (backend/files.mjs). The folder is the one the agent
+     writes to: the working folder from Settings, else the project's, else runs/. */
+  'GET /api/files': async (req, res) => {
+    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
+    const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
+    await ensureWorkspace();
+    const root = await folder(q);
+    json(res, 200, { root, files: await listFiles(root) });
+  },
+
+  'GET /api/file': async (req, res) => {
+    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
+    const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
+    const root = await folder(q);
+    if (q.raw !== '1') return json(res, 200, await readText(root, q.path));
+    const { stream, size, type } = await openRaw(root, q.path);
+    // sandbox: an SVG opened on its own must not run script with this origin
+    res.writeHead(200, { 'content-type': type, 'content-length': size, 'cache-control': 'no-store',
+                         'x-content-type-options': 'nosniff', 'content-security-policy': 'sandbox' });
+    stream.on('error', () => res.destroy()).pipe(res);
+  },
+
+  'PUT /api/file': async (req, res) => {
+    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
+    const q = await body(req);
+    const root = await folder(q);
+    json(res, 200, await writeText(root, q.path, q.content));
+  },
+
+  'DELETE /api/file': async (req, res) => {
+    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
+    const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
+    const root = await folder(q);
+    json(res, 200, await deleteFile(root, q.path));
+  },
+
+  'GET /api/search': async (req, res) => {
+    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
+    const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
+    const root = await folder(q);
+    json(res, 200, { results: await searchFiles(root, q.q) });
   },
 
   /* Probe an OpenAI-compatible endpoint and list the models it serves. */
@@ -437,7 +480,8 @@ const routes = {
   /* Server-sent events: one agent turn, streamed. */
   'POST /api/chat': async (req, res) => {
     const { message, sessionId, sessionDirId, model, env, runtime, chatCfg,
-            scratchDir, useWorkflow = true, resume = false, router: routerCfg } = await body(req);
+            scratchDir, useWorkflow = true, resume = false, router: routerCfg,
+            attachments, chat } = await body(req, 60e6);       // photos: far past the 4 MB a JSON call needs
     if (!message?.trim()) return json(res, 400, { error: 'message is empty' });
     if (HOSTED) return json(res, 400, { error:
       'This deployment runs Tellurium only. Pick a local model in Settings — it runs on ' +
@@ -452,34 +496,27 @@ const routes = {
     await ensureWorkspace();
     // a model picked mid-session: free the GPU of the one it replaces before loading this one
     if (runtime === 'openai') await ejectOthers(chatCfg.baseUrl, chatCfg.model).catch(() => {});
-    let scratch = RUNS;
-    try { scratch = await resolveScratch(scratchDir); }
+    // The project's own folder is where its memory (history.md) and its scratch live.
+    let sdir = null, scratch;
+    try { if (sessionDirId) sdir = await folder({ project: sessionDirId }); }
+    // worded as before: 'no such project: x' bare, a bad id prefixed
+    catch (e) { return json(res, 400, { error: e.message.replace(/^(?!no such project)/, 'Project: ') }); }
+    // A working folder the user picked in Settings wins over the project's own
+    // folder; the project folder is only the fallback scratch (rootFor's precedence).
+    try { scratch = await folder({ dir: scratchDir, project: sessionDirId }); }
     catch (e) { return json(res, 400, { error: 'Working folder: ' + e.message +
       ' — pick another in Settings, or clear it to use the default.' }); }
-
-    // The project's own folder is where its memory (history.md) and its scratch live.
-    // history.md is the whole memory: it goes in the system prompt, and the model gets
-    // no separate message history — one copy of each turn, never two.
-    let sdir = null;
-    if (sessionDirId) {
-      try { sdir = await sessionDir(WORK, sessionDirId); }
-      catch (e) { return json(res, 400, { error: 'Project: ' + e.message }); }
-    }
-    if (sdir && !existsSync(join(sdir, 'session.json'))) return json(res, 400, { error: 'no such project: ' + sessionDirId });
-    const memory = sdir ? await readHistory(sdir) : '';
-    // A working folder the user picked in Settings wins over the project's own
-    // folder; the project folder is only the fallback scratch.
-    if (sdir && !scratchDir) scratch = sdir;
     // in a project the agent edits that project's model, not the default one
     const mfile = sdir ? join(sdir, 'model.txt') : MODEL_FILE;
-    const modelPath = relative(ROOT, mfile);
-    const before = await readFile(mfile, 'utf8').catch(()=> '');
+    // Attachments go where the agent already works, and the message says where: both
+    // runtimes can then open them with the file tools they have.
+    let att = [];
+    try { att = await saveAttachments(scratch, attachments, join(ROOT, '.venv/bin/python')); }
+    catch (e) { return json(res, 400, { error: 'Could not save the attachment: ' + e.message }); }
+    // history.md and the router get the question and the file names; only the agent gets the contents
+    const said = !att.length ? message : message + '\n\n[attached: ' + att.map(f => f.path).join(', ') + ']';
+    const ask = message + attachmentNote(att, runtime === 'openai');
 
-    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8',
-                         'cache-control': 'no-cache', connection: 'keep-alive',
-                         'x-accel-buffering': 'no' });
-    const send = o => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(o)}\n\n`); };
-    const ka = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 15000);
     /* A local model turn runs for many minutes with nobody touching the Mac, and idle
        sleep cut one mid-step — measured (pmset -g log): display off 19:03:41, idle
        sleep 19:05:55; Chrome dropped the stream as "network error" and the run was
@@ -488,105 +525,50 @@ const routes = {
     const awake = process.platform === 'darwin' && !HOSTED
       ? spawn('caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' }).on('error', () => {})
       : null;
-    const done = () => { clearInterval(ka); awake?.kill(); };
 
-    /* The AI's edits to the model reach the editor as they happen, not when the turn
-       ends: a local 27B turn runs for many minutes, and a turn that is stopped or cut
-       off by a restart never ends at all — so its edits never showed. The folder is
-       watched rather than the file, because a write that replaces the file (a rename
-       into place) ends a watch on the file itself. */
-    // Serialized: fs.watch fires without waiting for the previous push's read, and
-    // 'result' also needs a push before it can send — two unserialized callers would
-    // race and could deliver an older read last.
-    let shown = before;
-    let pq = Promise.resolve();
-    const pushModel = () => (pq = pq.then(async () => {
-      const now = await readFile(mfile, 'utf8').catch(() => null);
-      if (now == null || now === shown) return;
-      shown = now;
-      if (editorEcho(mfile, now)) return;   // the user's own recent edit
-      send({ type: 'model_changed', src: now, version: await modelVersion(mfile) });
-    }));
-    let watcher = null;
-    try { watcher = watch(dirname(mfile), (e, name) => { if (!name || name === 'model.txt') pushModel(); }); }
-    catch (e) { console.error('[watch]', e.message); }
-    const unwatch = () => { watcher?.close(); watcher = null; };
+    // The turn belongs to the project, not to this response (live.mjs): closing the page
+    // no longer stops it. The turn itself — watcher, event queue, history, end-of-turn
+    // ordering — is turn.mjs.
+    const key = sessionDirId || '';
+    startLive(key, { q: message, chat, files: att.map(f => f.name), at: Date.now() }, (emit, end) => runTurn({
+      root: ROOT, sdir, mfile, scratch, message: said, ask, routerCfg, runtime, editorEcho, emit,
+      agent: runtime === 'openai' ? runLocalAgent : runAgent,
+      args: { sessionId, model, env: env || {}, chatCfg, useWorkflow, resume, te, images: att.filter(f => f.kind === 'image').map(f => f.url) },
+      compact: (sum, batch) => compactWith({ runtime, chatCfg, model }, sum, batch),
+      end: () => { awake?.kill(); end(); } }));
+    follow(res, key);
+  },
 
-    // Accumulated across the whole turn, appended to history.md when it ends. A
-    // whole-block re-send (Claude Code's final assistant message) repeats what the
-    // deltas already streamed, so drop it rather than doubling the text.
-    let thoughts = '', answer = '';
+  /* A page that was closed, or reloaded, while its project's turn was running: the turn
+     so far, then the rest live. 204 when there is none. The first event says what was
+     asked, since the page that knew is gone. */
+  'GET /api/chat/live': async (req, res) => {
+    const key = new URL(req.url, 'http://x').searchParams.get('project') || '';
+    const meta = HOSTED ? null : liveMeta(key);
+    if (!meta) { res.writeHead(204); return res.end(); }
+    follow(res, key, { type: 'live', ...meta });
+  },
 
-    // Events also arrive out of order relative to each other (each onEvent call is
-    // its own async invocation), so they're queued too: 'result' must not reach the
-    // browser before the model_changed push it triggers below.
-    let eq = Promise.resolve();
-    const onEvent = raw => (eq = eq.then(() => handle(raw)).catch(e => console.error('[event]', e)));
-    const handle = async raw => {
-        const ev = runtime === 'openai' ? raw : toUiEvent(raw);
-        if (ev?.type === 'result') await pushModel();
-        if (ev) send(ev);
-        if (ev?.type === 'thinking' && ev.text &&
-            !(ev.whole && thoughts.includes(ev.text.trim().slice(0, 60))))
-          thoughts += (ev.whole && thoughts && !thoughts.endsWith('\n') ? '\n\n' : '') + ev.text;
-        if (ev?.type === 'delta' && ev.text) answer += ev.text;
-        if (ev?.type === 'result' && ev.text) answer = ev.text;
-        if (raw.type === 'done') {
-          // one last look, in case the final write landed after the watcher's last event
-          unwatch();
-          await pushModel();
-
-          /* Persisting memory must never fail the turn. Every turn that ends — answered,
-             cut off, failed or stopped — is written at once; the fold then runs in the
-             background, so neither the chat nor the next turn waits for the model. */
-          if (sdir) try {
-            await appendHistory(sdir, turnLines(message, thoughts, answer));
-          } catch (e) { console.error('[history]', e.message); }
-          await release();
-          if (sdir) compressHistory(sdir, (sum, batch) => compactWith({ runtime, chatCfg, model }, sum, batch))
-            .catch(e => console.error('[history fold]', e.message));
-
-          done();
-          if (!res.writableEnded) res.end();
-        }
-      };
-
-    // The Skill router (backend/router.mjs), if switched on in Settings. The local
-    // agent routes at every step itself; the Claude CLI runs its own tool loop, so it
-    // is routed once, here, before the turn. The key is never logged.
-    const router = active(routerCfg)
-      ? s => route({ cfg: routerCfg, root: ROOT, request: message, hasModel: !!before.trim(), ...s })
-      : null;
-    let routed = '';
-    if (router && runtime !== 'openai') {
-      const r = await router({});
-      send({ type: 'log', text: logLine(r) });
-      routed = hintLine(r.hint) + await autoBlock(r.auto, ROOT);
-    }
-
-    // The awaits above (readHistory can wait behind a prior turn's compaction) can
-    // outlast the client; 'close' has then already fired, so never start the agent.
-    if (res.destroyed) { done(); unwatch(); return; }
-
-    // The project may be renamed while this turn runs: hold its folder so the old path
-    // keeps working (sessions.mjs holdDir) until the turn's history is written.
-    const release = sdir ? holdDir(sdir) : async () => {};
-
-    // any throw from here on must still reach the browser as an SSE frame
-    process.nextTick(() => {});
-    const run = runtime === 'openai'
-      ? runLocalAgent({ root: ROOT, prompt: message + SKILL_NOTE, chatCfg, router,
-                        useWorkflow, liveModel: before, modelPath, te, scratch, summary: memory, onEvent })
-      : runAgent({ root: ROOT, prompt: message + SKILL_NOTE + routed, sessionId, model, env: env || {},
-                   useWorkflow, liveModel: before, modelPath, scratch, summary: memory, resume, onEvent });
-    send({ type: 'session', sessionId: run.sessionId ?? sessionId ?? null, runtime: runtime || 'claude-code' });
-    // req 'close' fires once the body is read (long before the client disconnects);
-    // res 'close' is what actually tracks the SSE connection. writableFinished is
-    // true when we ended it ourselves (the 'done' branch above), so a normal finish
-    // doesn't also kill an already-finished run.
-    res.on('close', () => { done(); unwatch(); if (!res.writableFinished) run.kill(); });
+  // Stop is a request now: a closed connection used to be the only way to say it.
+  'POST /api/chat/stop': async (req, res) => {
+    stopLive((await body(req)).project || '');
+    json(res, 200, { ok: true });
   },
 };
+
+/** Stream a project's turn to one browser as SSE: all of it so far, then live. The
+    browser going away only ends this stream. */
+function follow(res, key, first) {
+  res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8',
+                       'cache-control': 'no-cache', connection: 'keep-alive',
+                       'x-accel-buffering': 'no' });
+  const write = o => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(o)}\n\n`); };
+  if (first) write(first);
+  const ka = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 15000);
+  const off = watchLive(key, o => { if (o) return write(o); clearInterval(ka); if (!res.writableEnded) res.end(); });
+  // res 'close' is what tracks the SSE connection (req 'close' fires once the body is read)
+  res.on('close', () => { clearInterval(ka); off?.(); });
+}
 
 const server = createServer(async (req, res) => {
   const url = req.url || '/';

@@ -370,6 +370,20 @@ function renderBudget(){
   budgetNotes.length=0;
   const b=draft.budget;
 
+  /* One press for "as much as this computer can do": no context size of our own (the
+     server then loads an LM Studio model at the largest window that fits, and takes
+     whatever window Ollama loaded), and no cap on how many steps the agent may take. */
+  const max=document.createElement('div'); max.className='row'; max.style.margin='0 0 16px';
+  max.innerHTML='<button class="btn" type="button">Set to maximum</button>'+
+    '<span class="hint" style="margin:0">Largest context window this computer can load, and no step limit. Press Save to keep it.</span>';
+  max.querySelector('button').onclick=()=>{
+    LOCAL.filter(L=>L.id!=='gguf').forEach(L=>{ draft.localCfg[L.ctx]=''; });   // a llama.cpp server's window is fixed when it starts
+    b.steps=NO_STEP_LIMIT;
+    renderLocal(); renderBudget();
+    flash(c.querySelector('button'), 'Set \u2713');
+  };
+  c.append(max);
+
   budgetNotes.push(slider(c, {
     label:'Reply length', range:BUDGET_LIMITS.replyPct,
     get:()=>b.replyPct, set:v=>{ b.replyPct=v; },
@@ -406,8 +420,12 @@ function renderBudget(){
   const note=document.createElement('p'); note.className='hint';
   const against=document.createElement('p'); against.className='hint';
   against.style.margin='0 0 10px';
-  budgetNotes.push(()=>{ against.innerHTML='Sized against a <b>'+n(draftCtx())+
-    '</b>-token window.'; });
+  // with no size of our own the real window is the runtime's, known only once a turn starts
+  const auto=()=>!LOCAL.some(L=>L.id!=='gguf' && +draft.localCfg[L.ctx]>0);
+  budgetNotes.push(()=>{ against.innerHTML=auto()
+    ? 'The context window is read from LM Studio or Ollama when a turn starts, at the largest size that loads. '+
+      'The token counts here are only an example, for a <b>'+n(draftCtx())+'</b>-token window.'
+    : 'Sized against a <b>'+n(draftCtx())+'</b>-token window.'; });
   budgetNotes.at(-1)();
   c.prepend(against);
   note.innerHTML='Shares of the context window, not fixed token counts, so one setting means '+

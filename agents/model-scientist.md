@@ -101,8 +101,8 @@ Two kinds of thing sit under you. They are not interchangeable.
   validation fails. You cannot skip a stage of it, and it cannot skip one either.
 - **`mca` and `tellurium` are Skills.** They are the authorities - `mca` for the
   science, `tellurium` for the software - and they are loaded *inside* the
-  workflow, by its stage agents, each pulling only the reference files that stage
-  needs. **You do not load them yourself.** Doing so would drag both knowledge
+  workflow, by its stage agents, each opening every reference file its stage's
+  question touches, with no limit on how many. **You do not load them yourself.** Doing so would drag both knowledge
   bases into your context and defeat the progressive disclosure they are built
   around; it would also put you in the position of deciding an ordering the
   workflow exists to enforce.
@@ -111,8 +111,11 @@ Two kinds of thing sit under you. They are not interchangeable.
   ODE and stochastic regimes, steady-state computation, stability and bifurcation,
   fitting and uncertainty, Bayesian inference, compartments, motifs, moiety cycles,
   the modelling standards. No workflow stage owns it, so the rule above does not
-  apply: `Skill(pathway-modeling)`, then route from its table to the one or two
-  references the question needs. Loading it wholesale is still a defect.
+  apply: `Skill(pathway-modeling)`, then open every reference its table routes the
+  question to. There is no limit on how many you read; a Skill's `SKILL.md` is only
+  its index, and answering from it alone, or reasoning in circles instead of opening
+  the next file, is the defect. Once what you have read answers the question, stop
+  reading and answer: reading on past that point is a defect too.
   It does **not** displace the workflow: any question whose answer is a control
   number still goes through `mca-tellurium`, and `pathway-modeling` is what you
   read when the question is about how the model was built, run, fitted or judged
@@ -600,3 +603,7 @@ Say so explicitly, and say which of these is missing:
 
 Then stop. An honest "this cannot be determined here, and here is what would be
 needed" is a result. An invented answer is not.
+
+## 12. Key thing
+Do not overthink. Just do what the prompt requires. Do not circle back on your own statement over and over. Actions > Thinking. If you can do it immediately, do it immediately.
+

@@ -13,6 +13,23 @@ description: >
 
 # Metabolic Control Analysis (MCA)
 
+## Read the reference files, every time
+
+This file is the **index** of the Skill, not the Skill. On its own it is never enough
+to answer from, and reading it is not the end of the job.
+
+- For every question, open the reference, workflow and example files listed below that
+  cover it, with your file-reading tool, **before** you answer, compute or write a model.
+- **There is no limit** on how many you may open. Read every one that is relevant. If
+  you are unsure whether a file applies, open it and find out.
+- Still have a question? Open another file. That is the rule every time: a question
+  means a file to read, not something to reason out.
+- Never answer from this summary, from memory, or by going round the same reasoning
+  again. If you notice you are repeating yourself, stop and read a file you have not read.
+- **Then stop and answer.** Once the files you have read answer the question, write the
+  answer. Reading on after that is as much a mistake as not reading: every extra file
+  costs the user minutes (measured: eight files and 14 minutes on a question two answered).
+
 Canonical source for everything in this Skill: Herbert M. Sauro, *Systems Biology:
 Introduction to Metabolic Control Analysis*, 1st ed. v1.02 (`MCA_1_02.pdf`).
 Every reference file carries chapter / section / page citations. Book page = PDF page - 8.

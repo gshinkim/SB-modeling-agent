@@ -1,1 +1,2 @@
 tellurium==2.2.13.1
+pypdf==6.19.0

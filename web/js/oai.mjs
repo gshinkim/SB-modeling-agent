@@ -149,7 +149,8 @@ export const cutoffNudge = (msg, hasTools) => msg.closedCall && msg.finish !== '
     'what you could not finish.' },
 ] : [
   { role: 'assistant', content: msg.reasoning ?? '' },
-  { role: 'user', content: 'Your reasoning was cut off. Do not think any further and do ' +
+  { role: 'user', content: 'Your reasoning ' + (msg.finish === 'length' ? 'was cut off' : 'ended with no answer and no tool call') +
+    '. Do not think any further and do ' +
     'not repeat it. ' + (hasTools
       ? 'Act now: make the next tool call your plan above calls for, or, if you already ' +
         'have every result you need, give the final answer in full.'
@@ -562,4 +563,52 @@ export function missingArgs(defs) {
         `filled in — nothing ran.`
       : null;
   };
+}
+
+/* ---- the tool loop's shared pieces (backend/local-agent.mjs, web/js/agent.mjs) ---- */
+export const NO_ANSWER = '(the model produced no final answer)';
+export const hasNumber = t => /\d/.test(String(t ?? ''));
+
+/** What a workflow stage lets through: thinking, and `unthink` taking back answer
+    text that was really thinking (see thinkStream) — never the tokens themselves. */
+export const quiet = emit => ev => { if (ev.type === 'thinking' || ev.type === 'unthink') emit(ev); };
+
+/** Force the structured object the workflow stage declared. `complete` is the
+    runtime's own completion call. */
+export async function constrain({ complete, messages, schema, emit, signal }) {
+  const ask = { role: 'user', content:
+    'Now output ONLY a JSON object matching the required schema for this stage. No prose, no code fences.' };
+  const onStream = quiet(emit);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let m;
+    try { m = await complete({ messages: [...messages, ask], schema, signal, onStream }); }
+    catch (e) {
+      if (e?.name === 'AbortError') throw e;
+      m = await complete({ messages: [...messages, ask], signal, onStream }); // no json_schema support
+    }
+    const parsed = parseLoose(m.content);
+    if (parsed && typeof parsed === 'object') return fill(parsed, schema);
+    messages.push(forHistory(m),
+                  { role: 'user', content: 'That was not valid JSON. Output the JSON object only.' });
+  }
+  return fill({}, schema);            // never crash the workflow on a weak model
+}
+
+function parseLoose(text) {
+  if (!text) return null;
+  const t = String(text).replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '').trim();
+  try { return JSON.parse(t); } catch {}
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch {} }
+  return null;
+}
+
+/** A missing required field must not throw inside the workflow's own template strings. */
+function fill(obj, schema) {
+  for (const k of schema.required ?? []) {
+    if (obj[k] !== undefined && obj[k] !== null) continue;
+    const t = schema.properties?.[k]?.type;
+    obj[k] = t === 'array' ? [] : t === 'boolean' ? false : t === 'object' ? {} : '';
+  }
+  return obj;
 }

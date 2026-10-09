@@ -17,3 +17,21 @@ model_output_2_control_target.json
 audit*.txt
 Activation.txt
 train.log
+
+# Not part of the product: graph and build outputs, design notes, the paper,
+# the retired UI, dev process docs, and Layla's training material.
+graphify-out/
+web-old/
+paper/
+MCA_Atlas_paper.pdf
+design.md
+classification.txt
+docs/
+Layla (altlernative to jev)/train.py
+Layla (altlernative to jev)/data.py
+Layla (altlernative to jev)/eval.py
+Layla (altlernative to jev)/train.jsonl
+Layla (altlernative to jev)/test.jsonl
+Layla (altlernative to jev)/questions.json
+Layla (altlernative to jev)/eval_*.txt
+Layla (altlernative to jev)/train.log

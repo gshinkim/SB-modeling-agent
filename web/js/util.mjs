@@ -56,3 +56,11 @@ export function flash(btn, text, ms=900){
     identical to slug() in backend/sessions.mjs — backend/sessions.test.mjs pins them. */
 export const slug = s => String(s).replace(/[\/\\:*?"<>|\x00-\x1f]/g, '').replace(/\s+/g, '-')
                                   .replace(/^[.\-]+|[.\-]+$/g, '').slice(0, 80);
+
+/* ---- the keyword rule Search uses on both tiers (web/js/search.mjs, backend/files.mjs) ---- */
+export const SNIPPET = 160;
+/** The query's words: lower-cased, longer than one character, no duplicates. */
+export const queryWords = q => [...new Set(String(q ?? '').toLowerCase().split(/[^\p{L}\p{N}_.]+/u)
+  .map(w => w.replace(/^\.+|\.+$/g, '')).filter(w => w.length > 1))];
+/** How many of `words` occur in `text` (case-insensitive substring). */
+export const hits = (words, text) => { const t = String(text ?? '').toLowerCase(); return words.filter(w => t.includes(w)).length; };

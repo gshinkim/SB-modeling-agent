@@ -269,11 +269,18 @@ def do_steady_state(q):
                                        [float(v) for v in r.getFloatingSpeciesConcentrations()])),
             "fluxes": dict(zip(r.getReactionIds(),
                                [float(v) for v in r.getReactionRates()])),
+            # dX/dt at the solution: the residual per species, not just its norm
+            "rates": dict(zip(r.getFloatingSpeciesIds(),
+                              [float(v) for v in r.getRatesOfChange()])),
             **info(r)}
 
 
 def do_mca(q):
     r = load(q["model"])
+    # roadrunner crashes the whole worker computing control coefficients with no reactions
+    if not r.getNumReactions():
+        raise ValueError("this model has no reactions (rate rules only); control "
+                         "coefficients are defined for reaction steps")
     apply_overrides(r, q.get("overrides"))
     r.conservedMoietyAnalysis = True
     dist = float(r.steadyState())
@@ -283,8 +290,10 @@ def do_mca(q):
             "coefficients are only defined at a steady state" % dist)
 
     def mat(m):
-        return {"rows": list(m.rownames), "cols": list(m.colnames),
-                "data": [[float(v) for v in row] for row in m]}
+        data = [[float(v) for v in row] for row in m]
+        # row sums of Tellurium's own numbers (the summation theorems), so the page adds nothing itself
+        return {"rows": list(m.rownames), "cols": list(m.colnames), "data": data,
+                "sums": [sum(v for v in row if math.isfinite(v)) for row in data]}
 
     out = {"steadyStateDistance": dist,
            "fluxControl": mat(r.getScaledFluxControlCoefficientMatrix()),
@@ -293,13 +302,20 @@ def do_mca(q):
            **info(r)}
     # summation theorem residual — the cheapest evidence that the result is trustworthy
     fc = out["fluxControl"]
-    out["fluxSummation"] = {row: sum(fc["data"][i]) for i, row in enumerate(fc["rows"])}
+    out["fluxSummation"] = dict(zip(fc["rows"], fc["sums"]))
     return out
+
+
+def do_antimony(q):
+    """SBML in, Antimony out; Antimony passes through. The editor only holds Antimony."""
+    src = q["src"]
+    return {"antimony": te.sbmlToAntimony(src) if re.match(r"\s*<(\?xml|sbml)", src) else src}
 
 
 HANDLERS = {"simulate": do_simulate, "steadyState": do_steady_state,
             "settle": do_settle,
             "mca": do_mca,
+            "antimony": do_antimony,
             "info": lambda q: info(load(q["model"])),
             "version": lambda q: {"tellurium": te.__version__,
                                   "roadrunner": roadrunner.__version__,

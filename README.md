@@ -4,12 +4,27 @@ A workbench for metabolic control analysis: an Antimony model on the left, its
 simulation in the middle, its configuration on the right, and an agent that can
 read, edit, run and analyse the model the same way you can.
 
-## Run
+## Install and run
+
+You need:
+
+- **Git** and **Node.js 20+** (`brew install node`, or from nodejs.org)
+- **Python 3.10–3.12** (`brew install python@3.12`)
+- **Claude Code**, for the AI panel: `npm install -g @anthropic-ai/claude-code`, then run
+  `claude` once and log in. The rest of the app works without it.
+
+Then:
 
 ```bash
-./setup.sh     # once: python venv + tellurium, and the .claude asset mirror
-./run.sh       # http://127.0.0.1:5173
+git clone https://github.com/gshinkim/MCA-Analaysis.git
+cd MCA-Analaysis
+./setup.sh     # once: Python venv, Tellurium, the Layla router and its weights
+./run.sh       # open http://127.0.0.1:5173
 ```
+
+`setup.sh` takes several minutes and several GB on first run (PyTorch and the router
+weights are the bulk). `SKIP_LAYLA=1 ./setup.sh` skips the router; the app then uses
+Jev, or no router at all. Rerunning `setup.sh` is safe.
 
 ## How it fits together
 
@@ -253,12 +268,15 @@ Settings → Runtime. `backend/router.mjs` runs `serve.py` as a warm Python work
 Held-out test set (173 cases), exact-set accuracy: **Layla 0.971**, TF-IDF 0.890,
 keywords 0.792, Jev 0.283, untrained Laya 0.249.
 
-Weights are not in git (~800 MB each). To rebuild:
+The trained weights are one 804 MB file, over GitHub's 100 MB limit for git, so they
+are attached to the `layla-v1` release instead, and `./setup.sh` downloads them and
+installs Layla's own Python environment (`pip install laya==0.3.20`).
+`SKIP_LAYLA=1 ./setup.sh` leaves Layla out.
+
+Publishing new weights (maintainers, after pushing):
 
 ```bash
-cd "Layla (altlernative to jev)"
-git clone https://github.com/receptron/laya     # the laya package
-# put the pretrained Laya checkpoint in base/, and set up .venv with torch + laya
-.venv/bin/python train.py 3     # writes checkpoint/  (~65 min on Apple MPS)
-.venv/bin/python eval.py        # scores against test.jsonl
+tar -cf /tmp/layla-checkpoint.tar -C "Layla (altlernative to jev)" checkpoint
+gh release create layla-v1 /tmp/layla-checkpoint.tar --title "Layla weights" \
+  --notes "Trained Layla checkpoint, downloaded by setup.sh."
 ```

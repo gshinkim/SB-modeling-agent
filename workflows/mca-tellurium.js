@@ -40,7 +40,7 @@ if (!question) {
 }
 
 const SKILL = (name) =>
-  `Load the \`${name}\` Skill first, with whichever tool this runtime gives you for that. Use that Skill's own routing table to pull ONLY the reference files this question needs — loading the knowledge base wholesale is a defect, not thoroughness. Never assert anything this Skill is the authority on from your own memory.`
+  `Load the \`${name}\` Skill first, with whichever tool this runtime gives you for that. Its SKILL.md is only the index: use its routing table to open every reference file this question touches, with no limit on how many, before you answer. Stopping at SKILL.md is a defect; a question means a file to open. Once what you have read answers the question, stop reading and answer. Never assert anything this Skill is the authority on from your own memory.`
 
 const CONTEXT = `
 QUESTION FOR THIS INVOCATION:

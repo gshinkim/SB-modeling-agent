@@ -1,11 +1,16 @@
-import { $, $$, store, fmt, flash, latestOnly, esc } from './util.mjs';
+import { $, $$, store, fmt, flash, latestOnly, esc, slug } from './util.mjs';
 import { S } from './state.mjs';
 import * as api from './api.mjs';
 import { draw, initChartInteractions, showTable } from './chart.mjs';
 import { renderControls, initAccordions, setOnChange } from './panel.mjs';
 import { initSettings, fillModels, closeSettings, refreshEnv, refreshLocal } from './settings.mjs';
-import { initChat, toggleChat, setOnModelChanged, setOnSessionDeleted, offerScratchSetup, dumpChats, loadChats, noteNoModel } from './chat.mjs';
-import { initExport, initImport } from './export.mjs';
+import { initChat, setOnModelChanged, setOnSessionDeleted, offerScratchSetup, dumpChats, loadChats, noteNoModel, resumeLive } from './chat.mjs';
+import { initExport, initImport, save, stampNow } from './export.mjs';
+import { initShell, go, where } from './shell.mjs';
+import { initPanes, syncIdentity, renderMeta } from './panes.mjs';
+import { initAnalysis, onRun, coefficientsCSV, reportMarkdown, describeRun } from './analysis.mjs';
+import { initFiles } from './files.mjs';
+import { initSearch } from './search.mjs';
 import { initSession, saveSoon, currentId, saveIdle } from './session.mjs';
 
 const editor = $('#model');
@@ -14,6 +19,15 @@ const status = (kind, text) => {
   $('#runDot').className = 'dot' + (kind==='busy'?' busy':kind==='err'?' err':'');
   $('#runStat').textContent = text;
 };
+
+/* line numbers beside the editor; rebuilt only when the line count changes */
+const gutter = $('#gutter'); let gutterLines = 0;
+function syncGutter(){
+  const n = editor.value.split('\n').length;
+  if(n !== gutterLines){ gutterLines = n; gutter.textContent = Array.from({length:n}, (_, i) => i+1).join('\n'); }
+  gutter.scrollTop = editor.scrollTop;
+}
+editor.addEventListener('scroll', syncGutter);
 
 const cfg = () => ({ start:+$('#tStart').value||0, end:+$('#tEnd').value||100,
                      points:+$('#nPts').value||50 });
@@ -28,6 +42,13 @@ async function run(){
   const c = cfg();
   if(!steadyMode && c.end <= c.start) return status('err','End time must exceed start');
   const seq = ++runSeq;
+  syncGutter();
+  if(!editor.value.trim()){                        // nothing to ask Tellurium yet: not an error
+    clearTimeout(busyTimer);
+    S.result = null; draw(); onRun(null);
+    $('#parseMsg').textContent = $('#zoomParse').textContent = $('#plotSub').textContent = $('#plotSub2').textContent = '';
+    return status('', 'No model yet');
+  }
   const t0 = performance.now();
   clearTimeout(busyTimer);
   busyTimer = setTimeout(()=>{ if(seq===runSeq)
@@ -44,7 +65,7 @@ async function run(){
     status('err', steadyMode ? 'No steady state' : 'Tellurium error');
     $('#parseMsg').innerHTML = '<span class="err">⚠ '+esc(String(r.error).split('\n')[0])+'</span>';
     $('#zoomParse').innerHTML = '<span class="err">error</span>';
-    S.result = null; draw();
+    S.result = null; draw(); onRun(null);
     return;
   }
   S.result = r.result;
@@ -52,40 +73,18 @@ async function run(){
   if(S.view && (S.view.t0 < S.result.t[0] || S.view.t1 > S.result.t.at(-1))) S.view = null;
 
   renderControls(editor, S.result);
-  const i = S.result;
-  // a rate-rule model has no reactions and no "floating species"; describe what is
-  // actually plotted rather than reporting a pile of zeroes
-  const bits = [];
-  if(i.reactions.length) bits.push(i.reactions.length+' reactions');
-  if(i.floatingSpecies.length) bits.push(i.floatingSpecies.length+' floating species');
-  if(i.globalParameters.length) bits.push(i.globalParameters.length+' parameters');
-  bits.push(i.names.length+(i.names.length===1?' series':' series')+' plotted');
-  const summary = bits.join(' · ');
-  $('#parseMsg').innerHTML = '<span class="chip">'+summary+'</span>'+
+  const i = S.result, d = describeRun(i, steadyMode, c, S.lastRunMs);
+  $('#parseMsg').innerHTML = '<span class="chip">'+d.summary+'</span>'+
     (i.note ? ' <span class="warn">⚠ '+esc(i.note)+'</span>' : '');
   $('#zoomParse').textContent = i.reactions.length+' reactions';
-  const eng = i.engine ? 'tellurium '+i.engine.tellurium : 'tellurium';
-  const eig = i.stability?.eigenvalues?.length
-    ? ' · max Re(λ) '+(+i.stability.maxRealPart.toPrecision(3)) : '';
-  $('#plotSub').textContent = steadyMode
-    ? (i.settled
-        ? c.points+' pts · steady state at t≈'+(+i.settleTime.toPrecision(4))+
-          ' · residual '+i.steadyStateDistance.toExponential(1)+eig+' · '+eng
-        : i.unstable
-          ? c.points+' pts · unstable steady state'+
-            (i.stability?.oscillatory ? ' (oscillatory)' : '')+eig+' · '+eng
-          : c.points+' pts · did not settle within t='+(+i.horizon.toPrecision(4))+' · '+eng)
-    : c.points+' pts · t '+c.start+'–'+c.end+' · '+eng;
-  $('#plotSub2').textContent = $('#plotSub').textContent;
-  status(steadyMode && !i.settled ? 'err' : 'ok',
-         (steadyMode
-            ? (i.settled ? 'Steady state · '
-                         : i.unstable ? 'Unstable — no steady state · ' : 'No settling · ')
-            : 'Ready · ')+S.lastRunMs.toFixed(0)+' ms');
+  $('#plotSub').textContent = $('#plotSub2').textContent = d.caption;
+  status(d.kind, d.status);
   if(steadyMode && i.note)
-    $('#parseMsg').innerHTML = '<span class="chip">'+summary+'</span> <span class="err">'+esc(i.note)+'</span>';
+    $('#parseMsg').innerHTML = '<span class="chip">'+d.summary+'</span> <span class="err">'+esc(i.note)+'</span>';
   captureDefault();
   draw();
+  syncIdentity(); renderMeta(d.caption);
+  onRun(S.result);
 }
 
 let commitT;
@@ -121,6 +120,7 @@ let lastCommitted = PROJ_DEF;
 function setProjName(n, save = true){
   proj.textContent = n || PROJ_DEF;
   if(save) lastCommitted = projName();
+  syncIdentity();
 }
 setProjName(PROJ_DEF, false);
 proj.addEventListener('keydown', e=>{
@@ -153,10 +153,19 @@ let deb;
 let editing = false;
 editor.addEventListener('input', ()=>{
   editing = true;
+  syncGutter();
   status('busy','Editing…');
   clearTimeout(deb); deb=setTimeout(commit, 300);
 });
 $('#rerunBtn').onclick = ()=>{ clearTimeout(deb); clearTimeout(commitT); commit(); };
+/* Revert: back to the text this model had when it was opened (boot, project open,
+   import or an AI edit) — edits autosave, so this is the only way back. */
+let opened = '';
+const setOpened = () => { opened = editor.value; };
+$('#revertBtn').onclick = ()=>{
+  if(editor.value === opened) return flash($('#revertBtn'), 'No edits');
+  editor.value = opened; S.view = null; commit();
+};
 $('#zoomRerun').onclick = ()=>$('#rerunBtn').click();
 
 /* ---------------- full-screen editor / plot ---------------- */
@@ -183,13 +192,12 @@ $('#scrim').onclick=()=>{ if(document.querySelector('#fp')?.classList.contains('
   zoomEditor(false); zoomPlot(false); closeSettings(); };
 
 /* ---------------- side panel ---------------- */
+/* The parameters popover floats over the plot, so it lives on the Time course tab. */
 function togglePanel(force){
-  const w=$('#work'), on = force ?? !w.classList.contains('panel-open');
-  w.classList.toggle('panel-open',on);
-  $('#panelBtn').textContent = on?'Hide side panel':'Open side panel';
+  const p=$('#side'), on = force ?? p.hidden;
+  if(on) go('workspace','sim');
+  p.hidden = !on;
   $('#panelBtn').setAttribute('aria-expanded',on);
-  store.set('panel',on);
-  setTimeout(draw,240);
 }
 /* steady-state mode */
 function setSteady(on){
@@ -221,14 +229,15 @@ $('#themeBtn').onclick=()=>{
 $('#helpBtn').onclick=()=>alert(
   '⌘/Ctrl + ⏎   rerun\n⌘/Ctrl + B   toggle side panel\nScroll on plot  zoom time axis\nDrag plot     pan (when zoomed)\nEsc           close overlays');
 addEventListener('keydown',e=>{
+  if(where().nav === 'home') return;             // no project open: nothing to rerun, no panel to show
   if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){ e.preventDefault(); $('#rerunBtn').click(); }
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='b'){ e.preventDefault(); togglePanel(); }
   if(e.key==='Escape'){
     if(!$('#tablePage').hidden) return showTable(false);
     if($('#editorWrap').classList.contains('zoom')) return zoomEditor(false);
     if($('#plotCard').classList.contains('zoom')) return zoomPlot(false);
+    if(!$('#side').hidden) return togglePanel(false);
     closeSettings();
-    if($('#chat').classList.contains('on')) toggleChat(false);
   }
 });
 
@@ -240,7 +249,7 @@ addEventListener('keydown',e=>{
 setOnModelChanged(src=>{
   if(src === editor.value) return;
   if(editing) return status('err', 'AI edited the model while you were typing — kept your text');
-  editor.value = src; run();
+  editor.value = src; setOpened(); run();
 });
 // a deleted session's name must not survive to regenerate the folder it named
 setOnSessionDeleted(()=> setProjName(PROJ_DEF));
@@ -249,7 +258,27 @@ setOnSessionDeleted(()=> setProjName(PROJ_DEF));
   const savedTheme = store.get('theme',null); if(savedTheme) applyTheme(savedTheme);
   matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>draw());
 
-  initAccordions(); initSettings(); initChartInteractions(); initChat(); initExport();
+  initShell();
+  initAccordions(); initSettings(); initChartInteractions(); initChat();
+  const report = () => save(new Blob([reportMarkdown()], {type:'text/markdown;charset=utf-8'}),
+                            (slug(projName()) || 'mca-atlas') + '-report-' + stampNow() + '.md');
+  const coef = () => { const csv = coefficientsCSV();
+    if(!csv) return status('err', 'No control coefficients yet: the model needs a steady state');
+    save(new Blob([csv], {type:'text/csv'}), (slug(projName()) || 'mca-atlas') + '-coefficients-' + stampNow() + '.csv'); };
+  initExport({ coef, report });
+  $('#infoReport').onclick = report; $('#infoCoef').onclick = coef;
+  // no accounts and no server to share through: Share hands over the run as Markdown
+  $('#shareBtn').onclick = async () => {
+    try { await navigator.clipboard.writeText(reportMarkdown()); flash($('#shareBtn'), 'Report copied'); }
+    catch { report(); }
+  };
+  initPanes({ getName: projName, rename: n => { setProjName(n); saveSoon(); },
+              // not commit(): that arms a save, and an unnamed project must not get a folder for being created
+              blank: () => { editor.value = ''; setOpened(); S.view = null; api.putModel('', currentId()); run(); } });
+  initAnalysis({ getModel: () => editor.value,
+                 setModel: src => { editor.value = src; setOpened(); S.view = null; commit(); },
+                 importFile: () => $('#openBtn').click(), report, coef });
+  initFiles(); initSearch();
   initSession({
     getName: projName,
     getModel: () => editor.value,
@@ -266,26 +295,35 @@ setOnSessionDeleted(()=> setProjName(PROJ_DEF));
                               $('#tEnd').value = s.settings.end ?? 100;
                               $('#nPts').value = s.settings.points; }
       loadChats(s.chats);
+      resumeLive();                                // its turn may still be running from before the page closed
       // The editor above was left showing whatever project was open before —
       // flag it, so the user is never silently shown another project's model
       // while believing it belongs to the session they just opened.
       if(!s.model) noteNoModel();
+      setOpened();
       S.view = null; run();
     },
   });
-  initImport((text, name) => {                 // loading a file replaces the live model
-    editor.value = text;
-    setProjName(name.replace(/\.(ant|txt|antimony)$/i,''));
+  initImport(async (text, name) => {           // loading a file replaces the live model
+    // SBML is converted by Tellurium; the editor only ever holds Antimony
+    if(/^\s*<(\?xml|sbml)/.test(text)){
+      status('busy', 'Converting SBML…');
+      const r = await api.convert(text);
+      if(!r.ok) return status('err', 'Could not read that SBML file: ' + String(r.error).split('\n')[0]);
+      text = r.result.antimony;
+    }
+    editor.value = text; setOpened();
+    setProjName(name.replace(/\.(ant|txt|antimony|xml|sbml)$/i,''));
     S.view = null; commit();
+    go('workspace', 'model');                    // importing from home starts a project named after the file
   });
   fillModels();
-  togglePanel(store.get('panel',true));
 
   S.defaultCfg = store.get('default', null);
   $('#steadyBtn').setAttribute('aria-pressed', steadyMode);
   $$('#tStart, #tEnd').forEach(el=>{ el.disabled = steadyMode; });
   const m = await api.getModel();
-  editor.value = m.src;
+  editor.value = m.src; setOpened();
 
   // workspace/settings.json is the last-committed simulation window; without this
   // a reload with no session open falls back to the HTML defaults while the file
@@ -299,9 +337,10 @@ setOnSessionDeleted(()=> setProjName(PROJ_DEF));
     // the picker is built before this resolves, and on a hosted deployment the
     // built-in Claude models must drop out of it
     S.env = e; refreshEnv(); fillModels(); offerScratchSetup();
-    if(e.hosted) ['#newProject','#loadSession','#delProjects'].forEach(s => $(s).hidden = true);
+    if(e.hosted) ['#projList','#newProject','#newProjName','#loadSession','#delProjects','#infoDelete','#attach']
+      .forEach(s => $(s).hidden = true);
     if(!e.telluriumInstalled) status('err','Tellurium not installed — run: bash setup.sh');
-    if(e.claude.error) $('#aiBar').title = e.claude.error;
+    if(e.claude.error) $('#modelPick2').title = e.claude.error;
   });
 
   run();

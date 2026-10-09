@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { FORMAT } from '../web/js/prompt.mjs';
+import { logLine, hintLine, autoBlock } from './router.mjs';
 
 /* The agent runtime is the Claude Code CLI, because that is what the project's
    assets are written against: agents/model-scientist.md is a subagent definition
@@ -151,7 +152,8 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
 }
 
 export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow = true,
-                          liveModel = '', modelPath, scratch = '', summary = '', resume = false, onEvent }) {
+                          liveModel = '', modelPath, scratch = '', summary = '', resume = false,
+                          router = null, onEvent }) {
   /* STARTED only knows about this process's own runs. A session loaded from disk
      was claimed by an earlier run of this server, so the caller says so with
      `resume` — without it the CLI is handed an id it has already claimed and the
@@ -159,9 +161,29 @@ export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow
   const resuming = !!sessionId && (resume || STARTED.has(sessionId));
   const sid = resuming ? sessionId : randomUUID();
   STARTED.add(sid);
-  const args = buildArgs({ root, prompt, sid, resuming, model, useWorkflow,
-                           liveModel, modelPath, scratch, summary });
+  // UI events out, the same shapes runLocalAgent emits: stream-json never leaves this file.
+  const emit = raw => { const ev = toUiEvent(raw); if (ev) onEvent(ev); };
+  let proc = null, killed = false;
+  (async () => {
+    // The Skill router (backend/router.mjs), if switched on in Settings. The local
+    // agent routes at every step itself; the Claude CLI runs its own tool loop, so it
+    // is routed once, here, before the turn. The key is never logged.
+    if (router) {
+      const r = await router({});
+      onEvent({ type: 'log', text: logLine(r) });
+      prompt += hintLine(r.hint) + await autoBlock(r.auto, root);
+    }
+    // stopped while routing: end the turn as a killed CLI would, without starting one
+    if (killed) return emit({ type: 'done', code: null, sessionId: sid });
+    proc = spawnClaude(buildArgs({ root, prompt, sid, resuming, model, useWorkflow,
+                                   liveModel, modelPath, scratch, summary }), root, env, emit, sid);
+  })().catch(e => { emit({ type: 'fatal', error: String(e.message || e) });
+                    emit({ type: 'done', code: 1, sessionId: sid }); });
 
+  return { sessionId: sid, kill: () => { killed = true; proc?.kill('SIGTERM'); } };
+}
+
+function spawnClaude(args, root, env, emit, sid) {
   const proc = spawn('claude', args, {
     cwd: root,
     // extended thinking is off by default in print mode; the UI has a place to show it.
@@ -180,18 +202,17 @@ export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i); buf = buf.slice(i + 1);
       if (!line.trim()) continue;
-      try { onEvent(JSON.parse(line)); }
+      try { emit(JSON.parse(line)); }
       catch { /* a non-JSON line from the CLI is noise, not a turn */ }
     }
   });
   proc.stderr.setEncoding('utf8');
-  proc.stderr.on('data', d => onEvent({ type: 'stderr', text: String(d) }));
-  proc.on('error', e => onEvent({ type: 'fatal', error: e.code === 'ENOENT'
+  proc.stderr.on('data', d => emit({ type: 'stderr', text: String(d) }));
+  proc.on('error', e => emit({ type: 'fatal', error: e.code === 'ENOENT'
     ? 'The `claude` CLI was not found on PATH. Install Claude Code, or pick a different runtime in Settings.'
     : e.message }));
-  proc.on('close', code => onEvent({ type: 'done', code, sessionId: sid }));
-
-  return { sessionId: sid, kill: () => proc.kill('SIGTERM') };
+  proc.on('close', code => emit({ type: 'done', code, sessionId: sid }));
+  return proc;
 }
 
 /* Flatten the CLI's stream-json into the few event shapes the UI actually renders. */

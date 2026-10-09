@@ -24,19 +24,29 @@ export const simulate = q => post('/api/simulate', q);
 export const steady   = q => post('/api/steady', q);
 export const settle   = q => post('/api/settle', q);
 export const mca      = q => post('/api/mca', q);
+// SBML → Antimony (Antimony passes through): the editor only ever holds Antimony
+export const convert  = src => post('/api/convert', { src });
 
 /** One agent turn, streamed as server-sent events. Returns an abort function.
     Forwards the whole options object as-is — no per-field allowlist to fall out of
     sync with what chat.mjs sends (sessionDirId, resume and scratchDir were dropped
     this way once already). */
-export function chat(opts, onEvent){
+export const chat = (opts, onEvent) => stream('/api/chat', { method:'POST',
+  headers:{'content-type':'application/json'}, body: JSON.stringify(opts) }, onEvent);
+/** The turn a project is running, from its start: {type:'live', q, chat, files, at}, then
+    its events. {type:'none'} alone when there is none. Returns detach(), which only
+    stops listening. */
+export const live = (project, onEvent) => stream('/api/chat/live?project=' + encodeURIComponent(project ?? ''), {}, onEvent);
+/** Closing a page no longer stops a turn, so Stop has to ask for it. */
+export const stopChat = project => fetch('/api/chat/stop', { method:'POST', headers:{'content-type':'application/json'},
+  body: JSON.stringify({ project: project ?? '' }) }).catch(() => {});
+
+function stream(url, init, onEvent){
   const ctrl = new AbortController();
   (async () => {
     let res;
     try{
-      res = await fetch('/api/chat', { method:'POST', signal: ctrl.signal,
-        headers:{'content-type':'application/json'},
-        body: JSON.stringify(opts) });
+      res = await fetch(url, { ...init, signal: ctrl.signal });
     }catch(e){
       // Stop pressed before the server even answered: no fatal, just end the turn
       // like any other abort, so the UI unbusies and doesn't log a fake exchange.
@@ -44,6 +54,7 @@ export function chat(opts, onEvent){
       onEvent({type:'fatal', error:String(e.message||e)});
       return;
     }
+    if(res.status === 204) return onEvent({type:'none'});
     if(!res.ok || !res.body){
       // the server explains misconfiguration in JSON; don't flatten it to a status code
       let msg = 'chat failed: HTTP '+res.status;

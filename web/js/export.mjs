@@ -6,7 +6,7 @@ import { S } from './state.mjs';
 
 const stamp = () => new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
 
-function save(blob, name){
+export function save(blob, name){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = name;
@@ -66,6 +66,8 @@ export function downloadAntimony(){
 
 /** The conversation as Markdown — the same source the chat bubbles rendered from,
     so bold, tables and any SVG the agent drew survive the trip to a file. */
+export const stampNow = stamp;
+
 export function downloadChat(title, md){
   save(new Blob([md], {type:'text/markdown;charset=utf-8'}),
        (slug(title) || 'chat') + '-chat-' + stamp() + '.md');
@@ -83,7 +85,7 @@ export function downloadCSV(){
     we want the contents, not a path, and it gets the OS picker for free. */
 export function initImport(onLoad){
   const input = document.createElement('input');
-  input.type = 'file'; input.accept = '.ant,.txt,.antimony,text/plain'; input.hidden = true;
+  input.type = 'file'; input.accept = '.ant,.txt,.antimony,.xml,.sbml,text/plain,text/xml'; input.hidden = true;
   document.body.append(input);
   input.onchange = async () => {
     const f = input.files?.[0];
@@ -110,7 +112,8 @@ export function initImport(onLoad){
   });
 }
 
-export function initExport(){
+/** `extra` adds menu entries by data-fmt: the control coefficients and the run report. */
+export function initExport(extra = {}){
   const btn = $('#dlBtn'), menu = $('#dlMenu');
   const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded','false'); };
   btn.onclick = e => {
@@ -120,7 +123,7 @@ export function initExport(){
   };
   menu.querySelectorAll('button').forEach(b => b.onclick = () => {
     close();
-    ({ png: downloadPNG, svg: downloadSVG, csv: downloadCSV, ant: downloadAntimony })[b.dataset.fmt]?.();
+    ({ png: downloadPNG, svg: downloadSVG, csv: downloadCSV, ant: downloadAntimony, ...extra })[b.dataset.fmt]?.();
   });
   addEventListener('click', close);
   addEventListener('keydown', e => { if(e.key === 'Escape') close(); });

@@ -2,7 +2,8 @@
    No DOM: pins the replay-cap decision loadChats uses to bound how many turns
    of a restored session get rendered (the DOM-touching part can't run here). */
 import assert from 'node:assert/strict';
-import { replaySlice, REPLAY_CAP, isEchoedThought, chatSnapshot } from './chat.mjs';
+import { replaySlice, REPLAY_CAP, chatSnapshot } from './chat.mjs';
+import { isEchoedThought } from './turn.mjs';
 
 const turn = n => ({ q: 'q'+n, a: 'a'+n });
 

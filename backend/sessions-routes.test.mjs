@@ -18,7 +18,7 @@ const beforeModel = await readFile(join(WORK, 'model.txt'), 'utf8').catch(() => 
 const beforeSettings = await readFile(join(WORK, 'settings.json'), 'utf8').catch(() => '');
 
 const srv = spawn('node', [join(ROOT, 'backend/server.mjs')],
-                  { env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
+                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1' }, stdio: 'ignore' });
 const up = async () => { for (let i = 0; i < 60; i++) {
   if (await fetch(url('/api/health')).then(() => true).catch(() => false)) return;
   await new Promise(r => setTimeout(r, 150)); } throw new Error('server never came up'); };
@@ -72,7 +72,7 @@ try {
 } finally {
   srv.kill();
   await rm(join(WORK, 'test-abc'), { recursive: true, force: true });
-  if (beforeModel) await writeFile(join(WORK, 'model.txt'), beforeModel);
+  await writeFile(join(WORK, 'model.txt'), beforeModel);   // also when it was empty: a new project's model is
   if (beforeSettings) await writeFile(join(WORK, 'settings.json'), beforeSettings);
 }
 

@@ -53,9 +53,10 @@ const RULES = `
 /* Appended to every question the user asks, on every runtime. */
 export const SKILL_NOTE = '\n\n---\n`mca`: the MCA concepts: what control coefficients and elasticities mean, the theorems, validating and interpreting them. ' +
   '`pathway-modeling`: building and analysing kinetic models (rate laws, steady states, stability, fitting). ' +
-  '`tellurium`: the software (Antimony syntax, RoadRunner calls), including computing MCA numbers (getCC, getEE) but not the MCA concepts. ' +
+  '`tellurium`: the software (Antimony syntax, RoadRunner calls), including computing MCA numbers (r.getScaledFluxControlCoefficientMatrix(), r.getScaledConcentrationControlCoefficientMatrix(), r.getScaledElasticityMatrix(): use these three, never your own arithmetic) but not the MCA concepts. ' +
   'Assume you do not know as much. Depend more on the Skills than trying to figure it out in your head. ' +
   'Try to use the Skills as much as possible, not only when you need them. ' +
+  'A Skill\'s SKILL.md is only its index: after loading a Skill, open every reference file in it that covers the question, with no limit on how many, before you answer. A question means a file to open, never something to reason out in circles. Once the files you have read answer the question, stop reading and answer. ' +
   'Do not overthink: keep your thinking short, then act. ' +
   'Before building or changing a model you must load `pathway-modeling`, then `tellurium`. Before computing, validating or reporting any control coefficient, elasticity, or rate-limiting / control-distribution claim you must load `mca` (and `tellurium` for the calculation). ' +
   'Compute every number with Tellurium in Python, never in your head.';

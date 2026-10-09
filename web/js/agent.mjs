@@ -1,6 +1,7 @@
 import { localChat } from './localai.mjs';
 import { forHistory, userQuestion, toolRunner, toolResult, resultCap, CONTEXT_DEFAULT,
-         REPEAT_LIMIT, stripToolSyntax, missingArgs, stepBudget, antimonyHint } from './oai.mjs';
+         REPEAT_LIMIT, stripToolSyntax, missingArgs, stepBudget, antimonyHint,
+         constrain, quiet, hasNumber, NO_ANSWER } from './oai.mjs';
 import { localSystem, SKILL_NOTE } from './prompt.mjs';
 import * as api from './api.mjs';
 
@@ -55,14 +56,15 @@ const WRITES = ['write_model', 'run_mca_workflow'];
 
 /* Tools that produce a number. Reading the model is not computing with it. */
 const COMPUTES = new Set(['simulate', 'steady_state', 'mca', 'run_mca_workflow']);
-const hasNumber = t => /\d/.test(String(t ?? ''));
 
 function tools(getModel, setModel, emit){
   const impl = {
     list_skills: async () => (await text('/skills/index.json')).toString(),
     load_skill: async ({ name }) => {
       const md = await text('/skills/' + name + '/SKILL.md');
-      return md + '\n\n(Use read_reference with a path from this Skill to load a reference file.)';
+      return md + '\n\n(The text above is only the index. Before you answer, read_reference every file it lists that ' +
+        'covers the question. There is no limit on how many you read; a question means a file to open. Once ' +
+        'what you have read answers the question, stop reading and answer.)';
     },
     read_reference: async ({ path }) => {
       if (!/^skills\/[\w.\-\/]+\.md$/.test(path)) throw new Error('only skills/**.md may be read');
@@ -146,7 +148,7 @@ async function loop({ chat, system, prompt, tk, schema, emit, signal, maxSteps =
     const calls = m.tool_calls ?? [];
     if (!calls.length){
       if (!schema) return m.content ?? '';
-      return constrain({ chat, messages, schema, emit, signal });
+      return constrain({ complete: chat, messages, schema, emit, signal });
     }
     for (const c of calls){
       const name = c.function?.name;
@@ -156,39 +158,7 @@ async function loop({ chat, system, prompt, tk, schema, emit, signal, maxSteps =
       messages.push(toolResult(c, name, String(out).slice(0, cap)));
     }
   }
-  return schema ? constrain({ chat, messages, schema, emit, signal }) : '(kept calling tools without answering)';
-}
-
-async function constrain({ chat, messages, schema, emit, signal }){
-  const ask = { role:'user', content:
-    'Now output ONLY a JSON object matching this stage\'s schema. No prose, no code fences.' };
-  const quiet = ev => { if (ev.type === 'thinking') emit(ev); };
-  for (let a = 0; a < 3; a++){
-    let m;
-    try { m = await chat({ messages:[...messages, ask], schema, onStream: quiet }); }
-    catch { m = await chat({ messages:[...messages, ask], onStream: quiet }); }
-    const p = parse(m.content);
-    if (p && typeof p === 'object') return fill(p, schema);
-    messages.push(forHistory(m), { role:'user', content:'That was not valid JSON. Output the object only.' });
-  }
-  return fill({}, schema);
-}
-
-function parse(t){
-  if (!t) return null;
-  const s = String(t).replace(/^\s*```(?:json)?/i,'').replace(/```\s*$/,'').trim();
-  try { return JSON.parse(s); } catch {}
-  const a = s.indexOf('{'), b = s.lastIndexOf('}');
-  if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b+1)); } catch {} }
-  return null;
-}
-function fill(o, schema){
-  for (const k of schema.required ?? []){
-    if (o[k] != null) continue;
-    const t = schema.properties?.[k]?.type;
-    o[k] = t === 'array' ? [] : t === 'boolean' ? false : t === 'object' ? {} : '';
-  }
-  return o;
+  return schema ? constrain({ complete: chat, messages, schema, emit, signal }) : '(kept calling tools without answering)';
 }
 
 /** One turn. Returns { kill }. Events mirror the server runtime's shapes. */
@@ -218,7 +188,7 @@ export function runBrowserAgent({ cfg, prompt, history = [], getModel, setModel,
           emit({ type:'phase', phase: opts.phase, label: opts.label });
           return loop({ chat, system: base, prompt: p, tk, schema: opts.schema, emit,
                         signal: ctrl.signal, cap, maxSteps: Math.max(2, STEPS - 2),
-                        stream: ev => { if (ev.type === 'thinking') emit(ev); } });
+                        stream: quiet(emit) });
         };
         const out = await new AsyncFunction('agent','phase','log','args', body)(
           agent,
@@ -259,6 +229,7 @@ export function runBrowserAgent({ cfg, prompt, history = [], getModel, setModel,
         if (!calls.length){ final = stripToolSyntax(m.content); break; }
         usedTools = true;
         for (const c of calls){
+          if (ctrl.signal.aborted) break;   // Stop: the call already in flight finishes, the rest (a write_model, say) never start
           const name = c.function?.name;
           let a = {}; try { a = JSON.parse(c.function?.arguments || '{}'); } catch {}
           emit({ type:'tools', tools:[{ name: name === 'run_mca_workflow' ? 'Workflow' : name, input: a }] });
@@ -267,7 +238,7 @@ export function runBrowserAgent({ cfg, prompt, history = [], getModel, setModel,
           messages.push(toolResult(c, name, String(out).slice(0, cap)));
         }
       }
-      emit({ type:'result', text: final || '(no final answer)', isError: !final,
+      emit({ type:'result', text: final || NO_ANSWER, isError: !final,
              noTools: !usedTools, unverified: !computed && hasNumber(final) });
       emit({ type:'done', code: 0 });
     } catch (e) {

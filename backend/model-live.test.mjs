@@ -43,7 +43,7 @@ const stub = createServer((req, res) => {
 await new Promise(r => stub.listen(0, '127.0.0.1', r));
 
 const srv = spawn('node', [join(ROOT, 'backend/server.mjs')],
-                  { env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
+                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1' }, stdio: 'ignore' });
 try {
   for (let i = 0; i < 60; i++) {
     if (await fetch(url('/api/health')).then(() => true).catch(() => false)) break;

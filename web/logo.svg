@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- MCA Atlas, one colour. An ode to Kacser and Burns: flux against enzyme dose is a
+       curve that flattens, so the cell with half the enzyme (middle bead) keeps almost
+       all of the flux of the one with the full dose (end bead). Cut out of a solid tile. -->
+  <mask id="m">
+    <rect width="48" height="48" fill="#fff"/>
+    <path d="M12 37C13 20 25 14 36 14" fill="none" stroke="#000" stroke-width="4.5" stroke-linecap="round"/>
+    <circle cx="23.7" cy="16.9" r="4.8" fill="#000"/>
+    <circle cx="36" cy="14" r="6.2" fill="#000"/>
+  </mask>
+  <rect width="48" height="48" rx="13" fill="#111827" mask="url(#m)"/>
+</svg>

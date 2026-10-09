@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
-import { runLocalAgent, runWorkflowFile } from './local-agent.mjs';
+import { runLocalAgent, runWorkflowFile, scriptStem } from './local-agent.mjs';
 import { Tellurium } from './tellurium.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -387,4 +387,199 @@ else {
   assert.match(t1, /already loaded/); assert.ok(t1.length < 2000, 'not the Skill again: ' + t1.length);
   assert.equal(result.text, 'The final answer.');
   console.log('ok (no Skill reload; a closed call with prose still gets the answer retry)');
+}
+
+/* A symlink inside the working folder that points outside both roots is still
+   outside: resolve() alone does not see it, so read_file and write_file followed it. */
+{
+  const { mkdtemp, rm, symlink, writeFile, mkdir } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const tmp = await mkdtemp(join(tmpdir(), 'jail-'));
+  const scratch = join(tmp, 'work'), out = join(tmp, 'outside');
+  await mkdir(scratch); await mkdir(out);
+  await writeFile(join(out, 'secret.txt'), 'TOP SECRET');
+  await symlink(out, join(scratch, 'link'));
+  const bodies = [];
+  const s10 = createServer((req, res) => {
+    if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); return res.end(); }
+    let b = ''; req.on('data', c => (b += c));
+    req.on('end', () => {
+      bodies.push(JSON.parse(b));
+      const call = (id, name, args) => ({ tool_calls: [{ index: 0, id, type: 'function',
+        function: { name, arguments: JSON.stringify(args) } }] });
+      const delta = [call('r1', 'read_file', { path: join(scratch, 'link/secret.txt') }),
+                     call('w1', 'write_file', { path: join(scratch, 'link/pwned.txt'), content: 'x' }),
+                     call('w2', 'write_file', { path: join(scratch, 'ok.txt'), content: 'x' })][bodies.length - 1]
+        ?? { content: 'done' };
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('data: ' + JSON.stringify({ choices: [{ delta }] }) + '\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise(r => s10.listen(0, '127.0.0.1', r));
+  await new Promise(done => {
+    runLocalAgent({ root: ROOT, prompt: 'follow the link', useWorkflow: false, scratch,
+      chatCfg: { baseUrl: 'http://127.0.0.1:' + s10.address().port, model: 'stub' },
+      onEvent: e => { if (e.type === 'done') done(); } });
+  });
+  s10.close();
+  const msgs = bodies.at(-1).messages, said = id => msgs.find(m => m.tool_call_id === id).content;
+  assert.match(said('r1'), /escapes the project/, 'read through a symlink: ' + said('r1'));
+  assert.match(said('w1'), /escapes the project/, 'write through a symlink: ' + said('w1'));
+  await assert.rejects(readFile(join(out, 'pwned.txt'), 'utf8'));
+  // tmpdir() is itself under a symlink on macOS (/var -> /private/var): still inside
+  assert.match(said('w2'), /^wrote /);
+  await rm(tmp, { recursive: true });
+  console.log('ok (symlink out of the working folder rejected)');
+}
+
+// run_python scripts are named for what they do, not run-<timestamp>
+assert.equal(scriptStem('Steady State Solver.py', 'x'), 'steady-state-solver');
+assert.equal(scriptStem('../../etc/passwd', 'x'), 'etc-passwd', 'a name cannot leave the working folder');
+assert.equal(scriptStem(undefined, '#!/usr/bin/env python\n# Scan k1 for the steady state\nimport tellurium'), 'scan-k1-for-the-steady-state');
+assert.match(scriptStem('', 'import tellurium'), /^run-\d+$/);
+console.log('ok (run_python scripts named for what they do)');
+
+/* Attached photos ride on the question as image parts. The router's step-0 text
+   used to be `+=`-ed onto that array, so the model was sent the literal
+   "[object Object],[object Object]" and never saw the question or the photo.
+   And read_file on the photo dumped a screenful of binary into the context. */
+{
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const tmp = await mkdtemp(join(tmpdir(), 'img-'));
+  await writeFile(join(tmp, 'gel.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 13, 1, 2, 3]));
+  const bodies = [];
+  const s10 = createServer((req, res) => {
+    if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); return res.end(); }
+    let b = ''; req.on('data', c => (b += c));
+    req.on('end', () => {
+      bodies.push(JSON.parse(b));
+      const delta = bodies.length === 1
+        ? { tool_calls: [{ index: 0, id: 'p1', type: 'function', function: { name: 'read_file',
+            arguments: JSON.stringify({ path: join(tmp, 'gel.png') }) } }] }
+        : { content: 'done' };
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('data: ' + JSON.stringify({ choices: [{ delta }] }) + '\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise(r => s10.listen(0, '127.0.0.1', r));
+  const IMG = 'data:image/png;base64,AAAA';
+  await new Promise(done => {
+    runLocalAgent({ root: ROOT, prompt: 'what is on this gel?', images: [IMG], useWorkflow: false, scratch: tmp,
+      router: async () => ({ auto: [['mca', 0.9]], hint: [], ms: 1 }),
+      chatCfg: { baseUrl: 'http://127.0.0.1:' + s10.address().port, model: 'stub' },
+      onEvent: e => { if (e.type === 'done') done(); } });
+  });
+  s10.close();
+  const q = bodies[0].messages.at(-1).content;
+  assert.ok(Array.isArray(q), 'the question is still text + image parts, not a string: ' + String(q).slice(0, 60));
+  assert.match(q[0].text, /^what is on this gel\?[\s\S]*\[router\] loaded the mca Skill/);
+  assert.deepEqual(q[1], { type: 'image_url', image_url: { url: IMG } });
+  const read = bodies[1].messages.at(-1).content;
+  assert.match(read, /not text/i, 'a binary file is named as one, not dumped: ' + JSON.stringify(read.slice(0, 80)));
+  await rm(tmp, { recursive: true });
+  console.log('ok (photo question survives the router; read_file refuses binary)');
+}
+
+/* A model that thinks and then simply stops: no answer, no tool call, finish "stop".
+   Measured on ternary-bonsai-2-27b: 17 minutes and 56,000 characters of thinking,
+   then end of turn, shown as "(the model produced no final answer)". Only a "length"
+   cut-off was followed up; this is the same dead end and gets the same one nudge. */
+{
+  const bodies = [];
+  const s11 = createServer((req, res) => {
+    if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); return res.end(); }
+    let b = ''; req.on('data', c => (b += c));
+    req.on('end', () => {
+      bodies.push(JSON.parse(b));
+      const choice = bodies.length === 1 ? { delta: { reasoning_content: 'I have thought about it at length.' }, finish_reason: 'stop' }
+                                         : { delta: { content: 'The flux is 2.' }, finish_reason: 'stop' };
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('data: ' + JSON.stringify({ choices: [choice] }) + '\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise(r => s11.listen(0, '127.0.0.1', r));
+  let result = null; const logs = [];
+  await new Promise(done => {
+    runLocalAgent({ root: ROOT, prompt: 'what is the flux?', useWorkflow: false,
+      chatCfg: { baseUrl: 'http://127.0.0.1:' + s11.address().port, model: 'stub' },
+      onEvent: e => { if (e.type === 'result') result = e; if (e.type === 'log') logs.push(e.text); if (e.type === 'done') done(); } });
+  });
+  s11.close();
+  assert.equal(bodies.length, 2, 'asked once more after an empty reply');
+  assert.equal(result.text, 'The flux is 2.');
+  assert.ok(logs.some(l => /stopped after thinking/.test(l)), logs.join(' | '));
+  console.log('ok (thinking that ends with no answer is asked for its next move)');
+}
+
+/* LM Studio, model not loaded and no context size set: it is loaded at the largest
+   window this computer takes — the model's maximum, halved on each refusal — and the
+   window LM Studio really gave (it may fit the request to memory) is the one used. */
+{
+  const loads = []; let loaded = false, maxTokens = 0;
+  const s12 = createServer((req, res) => {
+    let b = ''; req.on('data', c => (b += c));
+    req.on('end', () => {
+      const json = (o, code = 200) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+      if (req.url.startsWith('/api/v0/models/')) return json({ max_context_length: 262144,
+        state: loaded ? 'loaded' : 'not-loaded', ...(loaded ? { loaded_context_length: 60000 } : {}) });
+      if (req.url === '/api/v1/models/load') {
+        const n = JSON.parse(b).context_length; loads.push(n);
+        if (n > 100000) return json({ error: 'not enough memory' }, 400);
+        loaded = true; return json({ status: 'loaded' });
+      }
+      if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); return res.end(); }
+      maxTokens = JSON.parse(b).max_tokens;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('data: ' + JSON.stringify({ choices: [{ delta: { content: 'ok' } }] }) + '\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise(r => s12.listen(0, '127.0.0.1', r));
+  await new Promise(done => {
+    runLocalAgent({ root: ROOT, prompt: 'hi', useWorkflow: false,
+      chatCfg: { baseUrl: 'http://127.0.0.1:' + s12.address().port, model: 'stub' },
+      onEvent: e => { if (e.type === 'done') done(); } });
+  });
+  s12.close();
+  assert.deepEqual(loads, [262144, 131072, 65536], 'the maximum first, halved until it loads');
+  assert.equal(maxTokens, 30000, 'half of the 60000 LM Studio actually gave, not of the 65536 asked for');
+  console.log('ok (LM Studio loads at the largest window that fits)');
+}
+
+/* A file longer than one tool result can be read to its end: the first read says how
+   much is left and the offset to continue from, and the second read starts exactly there. */
+{
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const tmp = await mkdtemp(join(tmpdir(), 'long-'));
+  const long = Array.from({ length: 6000 }, (_, i) => 'line ' + i).join('\n');     // ~59,000 characters
+  await writeFile(join(tmp, 'chapter.md'), long);
+  const bodies = [];
+  const s13 = createServer((req, res) => {
+    if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); return res.end(); }
+    let b = ''; req.on('data', c => (b += c));
+    req.on('end', () => {
+      bodies.push(JSON.parse(b));
+      const more = /offset=(\d+)/.exec(bodies.length > 1 ? bodies.at(-1).messages.at(-1).content : '');
+      const delta = bodies.length === 1 || more
+        ? { tool_calls: [{ index: 0, id: 'r' + bodies.length, type: 'function', function: { name: 'read_file',
+            arguments: JSON.stringify({ path: join(tmp, 'chapter.md'), ...(more ? { offset: +more[1] } : {}) }) } }] }
+        : { content: 'done' };
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('data: ' + JSON.stringify({ choices: [{ delta }] }) + '\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise(r => s13.listen(0, '127.0.0.1', r));
+  await new Promise(done => {
+    runLocalAgent({ root: ROOT, prompt: 'read the chapter', useWorkflow: false, scratch: tmp,
+      chatCfg: { baseUrl: 'http://127.0.0.1:' + s13.address().port, model: 'stub' },
+      onEvent: e => { if (e.type === 'done') done(); } });
+  });
+  s13.close();
+  const got = bodies.slice(1).map(b => b.messages.at(-1).content).filter(c => !c.startsWith('done'))
+    .map(c => c.replace(/\n…\[\d+ more characters[^\]]*\]$/, '')).join('');
+  assert.ok(bodies.length >= 4, 'more than one read was needed: ' + bodies.length + ' requests');
+  assert.equal(got, long, 'the pieces join back into the whole file');
+  await rm(tmp, { recursive: true });
+  console.log('ok (a long file is read to its end with offset)');
 }

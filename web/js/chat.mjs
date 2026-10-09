@@ -7,12 +7,9 @@ import { renderMarkdown } from './md.mjs';
 import { downloadChat } from './export.mjs';
 import { currentId, touch, saveNow, saveSoon, openSessionById, deleteSessionById, newProject } from './session.mjs';
 import { pickSession } from './sessionpicker.mjs';
+import { showSide, go } from './shell.mjs';
+import { newTurn } from './turn.mjs';
 
-const SUGGEST = [
-  'Explain what this model does',
-  'Which step controls the pathway flux?',
-  'Compute the flux control coefficients',
-];
 
 let abort = null, onModelChanged = () => {}, onSessionDeleted = () => {};
 export const setOnModelChanged = fn => { onModelChanged = fn; };
@@ -50,22 +47,9 @@ export function replaySlice(log, cap = REPLAY_CAP){
   return { turns: turns.slice(-cap), skipped: turns.length - cap };
 }
 
-// A whole thinking block that merely repeats the deltas just streamed should be
-// suppressed. But each workflow phase reasons fresh and often opens with the
-// same boilerplate as an earlier phase — comparing against the WHOLE turn's
-// `thoughts` buffer would silently drop a genuinely new block over a shared
-// opening. Scope the check to the text since the last "— phase —" separator
-// (or the whole buffer, for the turn's first phase), i.e. what "immediately
-// preceded" this block. Pure so it can be unit-tested without a DOM.
-export function isEchoedThought(thoughts, text){
-  const t = (text || '').trim();
-  if(!t) return false;
-  const buf = thoughts || '';
-  const sep = /\n\n— [^\n]+ —\n/g;
-  let recentStart = 0, m;
-  while((m = sep.exec(buf))) recentStart = m.index + m[0].length;
-  return buf.slice(recentStart).includes(t.slice(0, 60));
-}
+/* Project switching stops the running turn first, so it lives here with `abort`.
+   The projects popover and the old modal picker both go through these. */
+const stopTurn = (real = true) => { if(abort){ abort(real); abort=null; $('#send').textContent='Send'; } };
 
 export function loadChats(saved){
   chats.forEach(c => c.thread.remove());
@@ -114,10 +98,7 @@ function makeChat(){
   const c = { id: ++seq, title: 'New chat', thread, history: [], sessionId: null, log: [] };
   chats.push(c);
   show(c.id);
-  bubble('ai','I read and edit the model in the editor, run Tellurium, and route every '+
-              'analysis through the <code>mca-tellurium</code> workflow. I keep this '+
-              'project’s history in its folder, so it is still there when you Load it again.');
-  return c;
+  return c;                                    // an empty thread shows the logo and a prompt (app.css .thread:empty)
 }
 
 /* Deletes the chat on screen. The project's history.md, the AI's memory of the
@@ -126,7 +107,7 @@ function deleteChat(){
   const c = cur(); if(!c) return;
   if(c.history.length && !confirm('Delete the chat "' + c.title + '"?\n\nIts messages are removed ' +
        'from this project. The project history the AI remembers is kept.')) return;
-  if(abort){ abort(); abort=null; $('#send').textContent='Send'; }
+  stopTurn();
   c.thread.remove();
   chats.splice(chats.indexOf(c), 1);
   if(chats.length) show(chats.at(-1).id); else makeChat();
@@ -139,8 +120,6 @@ function show(id){
   active = id;
   chats.forEach(c => { c.thread.hidden = c.id !== id; });
   renderChatPick();
-  const c = cur();
-  $('#sugg').hidden = !c || c.history.length > 0;
   $('#msgs').scrollTop = 1e9;
 }
 
@@ -159,35 +138,45 @@ function bubble(who, html){
   (cur()?.thread ?? $('#msgs')).append(d); $('#msgs').scrollTop=1e9; return d;
 }
 
+/* The chat is docked in the inspector: opening it means showing that pane. */
 export function toggleChat(force){
-  const c=$('#chat'), on = force ?? !c.classList.contains('on');
-  c.classList.toggle('on',on);
-  $('#aiBtn').setAttribute('aria-expanded',on);
-  $('#aiBar').style.opacity = on ? .35 : 1;
-  if(on) setTimeout(()=>$('#ask').focus(),120);
+  if(force === false) return;
+  showSide('chat');
+  setTimeout(()=>$('#ask').focus(),120);
 }
 
-function renderSugg(){
-  const s=$('#sugg'); s.textContent='';
-  SUGGEST.forEach(t=>{ const b=document.createElement('button'); b.className='btn sm'; b.textContent=t;
-    b.onclick=()=>{ $('#ask').value=t; send(); }; s.append(b); });
+/** Send `text` as the user's next message — Search's "ask the assistant". */
+export function ask(text){
+  toggleChat(true);
+  $('#ask').value = text;
+  send();
 }
 
-function send(){
-  const v=$('#ask').value.trim();
-  if(!v || abort) return;
-  const c = cur() ?? makeChat();
-  if(!c.history.length){                       // name the conversation by its opening line
-    c.title = v.length > 34 ? v.slice(0,33)+'…' : v;
-    renderChatPick();
-  }
-  bubble('me', esc(v));
-  $('#ask').value=''; $('#ask').style.height='auto';
-  $('#sugg').hidden=true;
+/* ---------------- attachments: files and photos sent with the next message ---------------- */
+const ATT_MAX = 10, ATT_BYTES = 8e6;      // the server stops at 10 too; 8 MB is a large phone photo
+let attached = [];
+function renderAttached(note = ''){
+  const L = $('#attList');
+  L.hidden = !attached.length && !note;
+  L.innerHTML = attached.map((f, i) =>
+    `<span class="att">${esc(f.name)}<button type="button" data-i="${i}" aria-label="Remove ${esc(f.name)}">×</button></span>`).join('') +
+    (note ? `<span class="att-note">${esc(note)}</span>` : '');
+}
+function attach(files){
+  const big = [...files].filter(f => f.size > ATT_BYTES).map(f => f.name);
+  attached = [...attached, ...[...files].filter(f => f.size <= ATT_BYTES)].slice(0, ATT_MAX);
+  renderAttached(big.length ? big.join(', ') + (big.length === 1 ? ' is' : ' are') + ' over 8 MB and was not attached' : '');
+}
+const base64 = f => new Promise((ok, no) => { const r = new FileReader();
+  r.onload = () => ok({ name: f.name, type: f.type, data: String(r.result).split(',')[1] ?? '' });
+  r.onerror = () => no(r.error); r.readAsDataURL(f); });
+
+/* The assistant's side of one turn on screen: its bubble, thinking panel, tool chips
+   and status line, painted from the events fed to the returned handle(). send() uses
+   it for a turn it starts, resumeLive() for one found already running. `started` is
+   when the turn began, for the "Thought for" time. */
+function turnUi(c, v, started = Date.now()){
   $('#send').textContent='Stop';
-
-  const sel = store.get('modelSel','cc:opus');
-  const rt  = resolveModel(sel);
   const wrap = bubble('ai','');
   const phase = document.createElement('div'); phase.className='tools'; wrap.append(phase);
 
@@ -204,106 +193,68 @@ function send(){
   // its own line: status used to be written into `text`, so one 'log' event
   // mid-stream erased everything the model had already said
   const stat = document.createElement('div'); stat.className='stat-line'; wrap.append(stat);
-  const seen = new Set(), chips = new Map();
-  const started = Date.now();
-  let body = '', lastPhase = '', thoughts = '', failed = false, logged = false;
+  const t = newTurn(v, c);
+  const els = new Map();
+  let shown;
 
-  const addTool = t => {
-    const label = t.name==='Workflow'    ? 'workflow: mca-tellurium'
-                : t.name==='run_python' || t.name==='python' ? 'python'
-                : t.name==='load_skill'  ? 'skill: '+(t.input?.name ?? '?')+(t.input?.by ? ' ('+t.input.by+')' : '')
-                : t.name==='Skill'       ? 'skill: '+(t.input?.skill ?? '?')
-                : t.name==='read_file'   ? 'read'
-                : t.name==='write_file'  ? 'write'
-                : t.name==='Bash'        ? 'bash'
-                : t.name.toLowerCase();
-    // A repeated call used to render as the same single chip, so a model looping
-    // ten times on one tool looked identical to one that worked first time.
-    const prev = chips.get(label);
-    if(prev){ prev.n++; prev.el.textContent = label+' ×'+prev.n; return; }
-    const c=document.createElement('span'); c.className='tool'; c.textContent=label; phase.append(c);
-    chips.set(label, { el:c, n:1 });
-    seen.add(label);
+  const paintChips = () => {
+    for(const x of t.seen){
+      const isPhase = x.startsWith('phase:'), n = t.chips.get(x);
+      let el = els.get(x);
+      if(!el){ el=document.createElement('span'); el.className = isPhase ? 'tool phase' : 'tool';
+               phase.append(el); els.set(x, el); }
+      el.textContent = isPhase ? x.slice(6) : n > 1 ? x+' ×'+n : x;
+    }
   };
-  const status = t => { stat.innerHTML = '<span class="thinking">'+esc(t)+'</span>'; };
-  const clearStatus = () => { stat.textContent=''; };
-  status(useWorkflow() ? 'Starting the model-scientist agent…'
-                       : 'Starting the model-scientist agent (workflow off)…');
+  // only when it changed: rewriting the line restarts its dots animation
+  const paintStatus = () => {
+    if(t.status === shown) return;
+    shown = t.status;
+    if(shown === null) stat.textContent='';
+    else stat.innerHTML = '<span class="thinking">'+esc(shown)+'</span>';
+  };
+  const paintThoughts = () => { if(tkBody.textContent !== t.thoughts) tkBody.textContent = t.thoughts; };
+  t.status = useWorkflow() ? 'Starting the model-scientist agent…'
+                           : 'Starting the model-scientist agent (workflow off)…';
+  paintStatus();
 
+  // Stop ends this turn now and only then tells the runtime, which may answer late
+  // or not at all. `abort` is this one function for the whole turn, so the turn can
+  // tell whether it is still the running one before it clears the global.
+  // `real` false only leaves the turn (another project is being opened): the server
+  // keeps running it, and resumeLive() picks it up when this project is opened again.
+  const ui = { kill: null, t };
+  const stop = (real = true) => { handle({ type:'closed', stopped:true, detached:!real }); ui.kill?.(real); };
+  abort = stop;
+
+  // turn.mjs decides what the event means; this only paints the result
   const handle = ev => {
-      if(ev.type==='session'){ c.sessionId = ev.sessionId; S.sessionId = ev.sessionId; return; }
-      if(ev.type==='init'){ status('Agent started…'); return; }
-      if(ev.type==='workflow_start'){ status('Running mca-tellurium…'); return; }
-      if(ev.type==='workflow_done'){ status('Workflow finished, composing the answer…'); return; }
-      if(ev.type==='phase'){
-        if(ev.phase && !seen.has('phase:'+ev.phase)){
-          seen.add('phase:'+ev.phase);
-          const c=document.createElement('span'); c.className='tool phase';
-          c.textContent=ev.phase; phase.append(c);
-        }
-        // Each stage reasons from a fresh context, so without a heading the panel
-        // reads as one model repeating itself instead of seven stages making progress.
-        if(ev.phase && ev.phase !== lastPhase && thoughts){
-          thoughts += '\n\n— '+ev.phase+' —\n';
-          tkBody.textContent = thoughts;
-        }
-        lastPhase = ev.phase || lastPhase;
-        status(ev.phase ? 'Phase: '+ev.phase : 'Working…');
-        return;
-      }
-      if(ev.type==='log'){ status(ev.text); return; }
-      if(ev.type==='heartbeat'){
-        const m=Math.floor(ev.seconds/60), sec=ev.seconds%60;
-        status((lastPhase?'Phase: '+lastPhase+' · ':'Working · ')+(m?m+'m ':'')+sec+'s');
-        return;
-      }
-      if(ev.type==='tools'){
-        ev.tools.forEach(t=>addTool(t));
-        body=''; text.textContent='';    // preamble before a tool call is not the answer
-        $('#msgs').scrollTop=1e9; return;
-      }
-      if(ev.type==='unthink'){
-        // the model's template pre-opened <think>: what streamed as the answer
-        // was really the scratchpad, so move it into the thinking panel
-        thoughts += body; body=''; text.textContent='';
-        think.hidden=false; tkBody.textContent=thoughts; return;
-      }
+      if(!t.feed(ev)) return;
+      paintStatus();
+      if(ev.type==='session'){ S.sessionId = ev.sessionId; return; }
+      if(ev.type==='phase'){ paintChips(); paintThoughts(); return; }
+      if(ev.type==='tools'){ paintChips(); text.textContent=''; $('#msgs').scrollTop=1e9; return; }
+      if(ev.type==='unthink'){ text.textContent=''; think.hidden=false; paintThoughts(); return; }
       if(ev.type==='thinking'){
-        // a whole block repeats what the deltas already streamed this phase
-        if(ev.whole && isEchoedThought(thoughts, ev.text)) return;
-        if(ev.tools) ev.tools.forEach(t=>addTool(t));
-        // streamed deltas concatenate; only whole blocks get a separator, or every
-        // token lands on its own line
-        thoughts += (ev.whole && thoughts && !thoughts.endsWith('\n') ? '\n\n' : '') + ev.text;
+        paintChips();
         think.hidden = false;
-        tkBody.textContent = thoughts;
+        paintThoughts();
         if(think.open) $('#msgs').scrollTop=1e9;
         return;
       }
-      if(ev.type==='delta'){ body += ev.text; text.textContent = body; clearStatus();
-                             $('#msgs').scrollTop=1e9; return; }
+      if(ev.type==='delta'){ text.textContent = t.body; $('#msgs').scrollTop=1e9; return; }
       if(ev.type==='result'){
-        if(ev.text) body = ev.text;
-        clearStatus();
-        if(body) text.innerHTML = renderMarkdown(body);
+        if(t.body) text.innerHTML = renderMarkdown(t.body);
         else text.textContent = '(no answer returned)';
-        if(thoughts){
+        if(t.thoughts){
           const secs = Math.max(1, Math.round((Date.now()-started)/1000));
           tkLabel.textContent = 'Thought for '+(secs>=60 ? Math.floor(secs/60)+'m '+(secs%60)+'s' : secs+'s');
           tkTime.textContent = '';
           think.classList.add('done');
         }
-        if(ev.unverified && body){
+        for(const msg of t.warns){
           const w=document.createElement('div'); w.className='meta warn';
-          w.textContent='No computation was run this turn — any number above came from '+
-                        'the model, not from Tellurium.';
-          wrap.append(w);
-        }
-        if(ev.noTools && body){
-          // a model that answers a question about the model without ever reading it
-          const w=document.createElement('div'); w.className='meta warn';
-          w.textContent='No tools were called — nothing here was checked against the '+
-                        'model or Tellurium.';
+          w.textContent=msg;
           wrap.append(w);
         }
         if(ev.ms) { const m=document.createElement('div'); m.className='meta';
@@ -311,38 +262,42 @@ function send(){
         return;
       }
       if(ev.type==='model_changed'){ onModelChanged(ev.src); return; }
-      if(ev.type==='fatal'){
-        failed = true; text.innerHTML = '<span class="err">'+esc(ev.error)+'</span>'; return; }
+      if(ev.type==='fatal'){ text.innerHTML = '<span class="err">'+esc(ev.error)+'</span>'; return; }
       if(ev.type==='done' || ev.type==='closed'){
-        // 'done' (agent) and 'closed' (stream end) both arrive on the server path
-        clearStatus();
-        if(body && !text.innerHTML.trim()) text.innerHTML = renderMarkdown(body);
-        if(!logged){
-          logged = true;
-          // A turn stopped before it produced anything, or one that failed outright,
-          // is not a real exchange — don't persist a "(no answer)" pair for it.
-          if(!failed && (body || ev.type === 'done')){
-            c.log.push({ q: v, a: body, tools: [...seen].filter(x => !x.startsWith('phase:')) });
-            const acts = [...seen].filter(x => !x.startsWith('phase:'));
-            c.history.push({ role:'user', content: v });
-            c.history.push({ role:'assistant', content: (body || '(no answer)') +
-              (acts.length ? '\n\n[tools used this turn: '+acts.join(', ')+']' : '') });
-            // The server path keeps memory in history.md and never reads this; only the
-            // hosted in-browser agent does, so keep it bounded.
-            if(c.history.length > 24) c.history.splice(0, c.history.length - 24);
-          }
-        }
-        if(thoughts && !think.classList.contains('done')){
+        if(t.body && !text.innerHTML.trim()) text.innerHTML = renderMarkdown(t.body);
+        if(t.thoughts && !think.classList.contains('done')){
           const secs = Math.max(1, Math.round((Date.now()-started)/1000));
           tkLabel.textContent = 'Thought for '+secs+'s';
           think.classList.add('done');
         }
-        if(!body && !failed && ev.type==='done' && ev.code) text.innerHTML =
+        if(!t.body && !t.failed && ev.type==='done' && ev.code) text.innerHTML =
           '<span class="err">The agent exited with code '+ev.code+'. Check the server log.</span>';
-        abort=null; $('#send').textContent='Send'; $('#msgs').scrollTop=1e9;
+        // a finished turn's late 'closed' must not clear the stop handle of the next one
+        if(abort === stop){ abort=null; $('#send').textContent='Send'; }
+        $('#msgs').scrollTop=1e9;
         saveSoon();
       }
   };
+  ui.handle = handle;
+  return ui;
+}
+
+function send(){
+  const files = attached;
+  // a photo on its own is a question too
+  const v = $('#ask').value.trim() || (files.length ? 'Look at what I attached.' : '');
+  if(!v || abort) return;
+  const c = cur() ?? makeChat();
+  if(!c.history.length){                       // name the conversation by its opening line
+    c.title = v.length > 34 ? v.slice(0,33)+'…' : v;
+    renderChatPick();
+  }
+  bubble('me', esc(v) + (files.length ? '<div class="att-sent">' + files.map(f => esc(f.name)).join(' · ') + '</div>' : ''));
+  attached = []; renderAttached();
+  $('#ask').value=''; $('#ask').style.height='auto';
+
+  const rt  = resolveModel(store.get('modelSel','cc:opus'));
+  const ui = turnUi(c, v);
 
   if(rt.runtime === 'openai' && S.env?.hosted){
     // Hosted: this server is not the user's machine, so it cannot reach their model
@@ -353,22 +308,45 @@ function send(){
       getModel: () => $('#model').value,
       setModel: src => { $('#model').value = src;
                          $('#model').dispatchEvent(new Event('input',{bubbles:true})); },
-      onEvent: handle,
+      onEvent: ui.handle,
     });
-    abort = () => a.kill();
+    ui.kill = () => a.kill();
   } else {
     // Save first: the turn's memory (history.md) and files go in the project's folder,
     // which must exist — and have its final name — before the agent starts.
-    let stopped = false;
-    abort = () => { stopped = true; handle({ type: 'closed' }); };
     touch();
-    saveNow().finally(() => {
-      if(stopped) return;
-      abort = api.chat({ message: v, sessionId: c.sessionId, sessionDirId: currentId(),
+    Promise.all([Promise.all(files.map(base64)), saveNow().catch(() => {})]).then(([attachments]) => {
+      if(ui.t.stopped) return;
+      const project = currentId();
+      const off = api.chat({ message: v, chat: c.id, sessionId: c.sessionId, sessionDirId: project,
                          resume: !!c.sessionId, ...rt, scratchDir: scratchDir(),
-                         useWorkflow: useWorkflow(), router: router() }, handle);
-    });
+                         useWorkflow: useWorkflow(), router: router(), attachments }, ui.handle);
+      // closing the stream no longer stops the turn: Stop has to ask the server
+      ui.kill = real => { if(real) api.stopChat(project); off(); };
+    }, e => ui.handle({ type: 'fatal', error: 'Could not read the attachment: ' + (e?.message ?? e) }));
   }
+}
+
+/* A page closed or reloaded mid-turn left the agent working (backend/live.mjs). Called
+   when a project is opened: if its turn is still running, or finished unseen, show the
+   question again and replay the whole turn into a fresh bubble, then follow it live. */
+export function resumeLive(){
+  const project = currentId();
+  if(abort || !project || S.env?.hosted) return;
+  let ui = null;
+  const off = api.live(project, ev => {
+    if(ev.type === 'none' || currentId() !== project) return;
+    if(ev.type === 'live'){
+      if(abort) return off();                          // a turn was started here in the meantime
+      const c = chats.find(x => x.id === ev.chat) ?? cur() ?? makeChat();
+      show(c.id);
+      bubble('me', esc(ev.q) + (ev.files?.length ? '<div class="att-sent">' + ev.files.map(esc).join(' · ') + '</div>' : ''));
+      ui = turnUi(c, ev.q, ev.at);
+      ui.kill = real => { if(real) api.stopChat(project); off(); };
+      return;
+    }
+    ui?.handle(ev);
+  });
 }
 
 /* The log is the markdown the model actually sent, not a scrape of the rendered
@@ -403,26 +381,35 @@ export function offerScratchSetup(){
   row.append(pick, skip); d.append(row);
 }
 
+export async function startNewProject(){
+  stopTurn(false);                       // leave it running: it is that project's turn, not this page's
+  await newProject();
+  onSessionDeleted(); loadChats([]);     // clean Untitled project; the editor keeps its model, as a reload does
+}
+export async function openProject(id){
+  stopTurn(false);
+  try { await openSessionById(id); return true; }
+  catch(e){ alert('Could not open that project: ' + e.message); return false; }
+}
+export async function deleteProjects(ids){
+  const failed = [];
+  for(const id of ids){
+    const isCurrent = id === currentId();
+    if(isCurrent) stopTurn();
+    const r = await deleteSessionById(id);
+    if(r.error){ failed.push(id + ': ' + r.error); continue; }
+    if(isCurrent){ onSessionDeleted(); loadChats([]); go('home'); }  // nothing is open now: back to home, not an Untitled workspace
+  }
+  if(failed.length) alert('Could not delete:\n' + failed.join('\n'));
+}
+
 export function initChat(){
   $('#chatSave').onclick = exportChat;
-  $('#aiBtn').onclick   = ()=>toggleChat();
-  $('#chatRail').onclick= ()=>toggleChat(true);
-  $('#chatClose').onclick=()=>toggleChat(false);
-  $('#newChat').onclick = ()=>{ if(abort){ abort(); abort=null; $('#send').textContent='Send'; }
-                               makeChat(); $('#ask').focus(); };
+  $('#newChat').onclick = ()=>{ stopTurn(); makeChat(); $('#ask').focus(); };
   $('#delChat').onclick = deleteChat;
-  const stop = () => { if(abort){ abort(); abort=null; $('#send').textContent='Send'; } };
-  $('#newProject').onclick = async () => {
-    stop();
-    await newProject();
-    onSessionDeleted(); loadChats([]);     // clean Untitled project; the editor keeps its model, as a reload does
-  };
   $('#loadSession').onclick = async () => {
     const id = await pickSession();
-    if(!id) return;
-    stop();
-    try { await openSessionById(id); }
-    catch(e){ alert('Could not open that project: ' + e.message); }
+    if(id) openProject(id);
   };
   $('#delProjects').onclick = async () => {
     const ids = await pickSession({ mode: 'delete' });
@@ -431,22 +418,15 @@ export function initChat(){
                 ids.map(id => 'workspace/' + id).join('\n') + '\n\nEach folder goes with everything in '+
                 'it — the conversation, history.md, the model snapshot and every file the AI wrote. '+
                 'This cannot be undone.')) return;
-    const failed = [];
-    for(const id of ids){
-      const isCurrent = id === currentId();
-      if(isCurrent) stop();
-      const r = await deleteSessionById(id);
-      if(r.error){ failed.push(id + ': ' + r.error); continue; }
-      if(isCurrent){ onSessionDeleted(); loadChats([]); }  // back to a clean, untouched Untitled project
-    }
-    if(failed.length) alert('Could not delete:\n' + failed.join('\n'));
+    deleteProjects(ids);
   };
-  $('#chatPick').onchange = e => { if(abort){ abort(); abort=null; $('#send').textContent='Send'; }
-                                   show(+e.target.value); };
-  $('#send').onclick = ()=>{ if(abort){ abort(); abort=null; $('#send').textContent='Send'; } else send(); };
+  $('#chatPick').onchange = e => { stopTurn(); show(+e.target.value); };
+  $('#send').onclick = ()=>{ if(abort) stopTurn(); else send(); };
+  $('#attach').onclick = () => $('#attachInput').click();
+  $('#attachInput').onchange = e => { attach(e.target.files); e.target.value = ''; };
+  $('#attList').onclick = e => { const i = e.target.dataset.i; if(i != null){ attached.splice(+i, 1); renderAttached(); } };
   $('#ask').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
   $('#ask').addEventListener('input',e=>{
     e.target.style.height='auto'; e.target.style.height=Math.min(110,e.target.scrollHeight)+'px'; });
-  renderSugg();
   makeChat();
 }

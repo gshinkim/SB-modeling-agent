@@ -1,14 +1,17 @@
-import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, readdir, mkdir, lstat, realpath } from 'node:fs/promises';
 import { join, resolve, relative, dirname, sep } from 'node:path';
+import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { Readable } from 'node:stream';
 import { forHistory, toolRunner, toolResult, readCompletion, fitMessages, resultCap,
          CONTEXT_DEFAULT, REPEAT_LIMIT, stripToolSyntax, missingArgs, replyTokens,
-         stepBudget, SAMPLING, cutoffNudge, antimonyHint, callTool, userQuestion, closedNote } from '../web/js/oai.mjs';
+         stepBudget, SAMPLING, cutoffNudge, antimonyHint, callTool, userQuestion, closedNote,
+         constrain, quiet, hasNumber, NO_ANSWER } from '../web/js/oai.mjs';
 import { localSystem } from '../web/js/prompt.mjs';
 import { logLine, hintLine, recentLine, failed } from './router.mjs';
+import { pdfText, asText } from './files.mjs';
 
 /* A second agent runtime for models that are not Claude Code: anything speaking
    OpenAI-compatible /v1/chat/completions (Ollama, LM Studio, llama-server, a GGUF
@@ -70,15 +73,29 @@ export class Chat {
     /* LM Studio, model not loaded yet: the first chat request JIT-loads it at LM
        Studio's own default, 8192 — measured: the turn died on its first Skill
        load with HTTP 400 "request (10294 tokens) exceeds the available context
-       size (8192 tokens)", every time. Load it ourselves at a size a Skill turn
-       fits in. Already loaded: its real window wins over any setting. */
-    const lm = await ask('/api/v0/models/' + encodeURIComponent(this.model)).catch(() => ({}));
+       size (8192 tokens)", every time. Load it ourselves, and at the largest window
+       this computer takes: ask for the model's maximum (or the user's own number),
+       and halve on a refusal down to a size a Skill turn still fits in. LM Studio may
+       also fit the request to memory itself (measured, MLX: asked 131072, loaded
+       118016), so the window is read back rather than assumed. Already loaded: its
+       real window wins over any setting. */
+    const info = () => ask('/api/v0/models/' + encodeURIComponent(this.model)).catch(() => ({}));
+    const lm = await info();
     if (lm.max_context_length > 0) {
       if (lm.state === 'loaded' && lm.loaded_context_length > 0) { this.ctx = lm.loaded_context_length; this.detected = 2; return; }
-      const want = Math.min(this.ctxSet ? this.ctx : LMSTUDIO_LOAD_CTX, lm.max_context_length);
-      const r = await ask('/api/v1/models/load', { model: this.model, context_length: want }, 300000)
-        .catch(() => ({}));
-      if (r.status === 'loaded') { this.ctx = want; this.detected = 2; return; }
+      // Already loading (LM Studio's own JIT, or another turn): a second load made a second
+      // instance, "model:2", 37 GB beside the first. Wait for the one under way instead.
+      for (let i = 0, m = lm; m.state === 'loading' && i < 300; i++) {
+        await new Promise(r => setTimeout(r, 1000)); m = await info();
+        if (m.state === 'loaded' && m.loaded_context_length > 0) { this.ctx = m.loaded_context_length; this.detected = 2; return; }
+      }
+      // ponytail: halving search, each refusal costs one load attempt; ask LM Studio for its own estimate if that gets slow
+      for (let want = Math.min(this.ctxSet ? this.ctx : Infinity, lm.max_context_length); ; want = Math.floor(want / 2)) {
+        const r = await ask('/api/v1/models/load', { model: this.model, context_length: want }, 300000)
+          .catch(() => ({}));
+        if (r.status === 'loaded') { this.ctx = (await info()).loaded_context_length || want; this.detected = 2; return; }
+        if (want <= LMSTUDIO_LOAD_CTX) break;
+      }
     }
     if (this.ctxSet) { this.detected = 2; return; }
     // Separate try per lookup: /api/show failing (a timeout, or a 200 that is not
@@ -116,7 +133,9 @@ export class Chat {
     // A closed-tools call is retried even when prose came with it: that prose is the
     // run-up to the call ("Let me write the final model…:"), not an answer — measured
     // on bonsai-27b, it was shown as one.
-    if (!msg.closedCall && (msg.finish !== 'length' || msg.tool_calls?.length || msg.content)) return msg;
+    // Nothing visible is a dead end whatever ended it: the token limit, or (measured on
+    // ternary-bonsai-2-27b: 17 minutes of thinking, then end of turn) the model itself.
+    if (!msg.closedCall && (msg.tool_calls?.length || msg.content)) return msg;
 
     /* Cut off mid-thought with nothing visible. The thinking is the work, and it
        is already done, so put what got through back in front of the model and ask
@@ -125,7 +144,8 @@ export class Chat {
        so a model that obeyed the rules had nothing to say and said nothing. */
     onStream?.({ type: 'log', text: this.model +
       (msg.closedCall ? ' called a tool after tools were closed; asking it to answer.'
-                   : ' was cut off while thinking; asking it for its next move.') });
+                   : msg.finish === 'length' ? ' was cut off while thinking; asking it for its next move.'
+                   : ' stopped after thinking without answering; asking it for its next move.') });
     const retry = { ...body, messages: fitMessages([...messages, ...cutoffNudge(msg, tools?.length)],
       this.ctx, cap) };
     const second = await this.send(retry, { signal, onStream, tools });
@@ -198,7 +218,6 @@ const WRITES = ['write_file', 'run_python', 'run_mca_workflow'];
    is the one thing the agent is not allowed to do. The answer is still shown — it is
    labelled, so the user knows nothing behind the number was checked. */
 const COMPUTES = new Set(['run_python', 'run_mca_workflow']);
-const hasNumber = t => /\d/.test(String(t ?? ''));
 
 /* A model that has not read the tellurium Skill invents the API and burns a step
    per guess — measured: five attempts at loadAntimonyModel / Simulator / SBMLReader
@@ -228,13 +247,21 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
   // startsWith(root) also passes a sibling directory whose name has root as a
   // string prefix (root-evil/x), so every comparison requires the separator too.
   const inside = (abs, dir) => abs === dir || abs.startsWith(dir + sep);
-  const jail = p => {
+  const jail = async p => {
     let abs = resolve(root, p || '.');
     // "/workspace/x" meant the project root — measured: bonsai-27b spent 7 of 14
     // steps on "path escapes" for it. Still checked below like any other path.
     if (!inside(abs, root) && !inside(abs, scratch) && String(p).startsWith('/'))
       abs = resolve(root, '.' + p);
     if (!inside(abs, root) && !inside(abs, scratch))
+      throw new Error('path escapes the project and the working folder: ' + p);
+    // ...and through a symlink, which resolve() alone does not see (as safePath in
+    // files.mjs): the deepest part that exists must really live inside. The roots
+    // are realpathed too — on macOS tmpdir() is under /var -> /private/var.
+    let probe = abs;
+    while (!(await lstat(probe).catch(() => null))) probe = dirname(probe);
+    const [real, r, s] = await Promise.all([probe, root, scratch].map(d => realpath(d).catch(() => null)));
+    if (!real || !(r && inside(real, r)) && !(s && inside(real, s)))
       throw new Error('path escapes the project and the working folder: ' + p);
     return abs;
   };
@@ -250,15 +277,30 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
       loaded.add(name);
       const files = await readdir(join(root, 'skills', name), { recursive: true })
         .catch(() => []);
-      return md + '\n\n--- files in this skill (read with read_file) ---\n' +
+      return md + '\n\n--- The text above is only the index. Before you answer, read_file every file below that covers ' +
+        'the question. There is no limit on how many you read; a question means a file to open. Once what you ' +
+        'have read answers the question, stop reading and answer. ---\n' +
         files.filter(f => f.endsWith('.md')).map(f => 'skills/' + name + '/' + f).join('\n');
     },
-    async read_file({ path }) {
-      const t = await readFile(jail(path), 'utf8');
-      return t.length > cap ? t.slice(0, cap) + '\n…[truncated — read a narrower path]' : t;
+    async read_file({ path, offset }) {
+      const abs = await jail(path);
+      /* One result holds `cap` characters and nine Skill references are longer (the
+         largest 372 KB): the rest used to be unreachable ("read a narrower path", of a
+         single file). `offset` reads on from where the last result stopped. */
+      const part = t => {
+        const from = Math.max(0, Math.floor(Number(offset) || 0)), room = Math.max(500, cap - 200), left = t.length - from - room;
+        return left > 0 ? t.slice(from, from + room) + `\n…[${left} more characters. To read on, call read_file again with ` +
+          `the same path and offset=${from + room}]` : t.slice(from);
+      };
+      // read as utf8, a 700 KB photo came back as a screenful of binary and the model looped on it
+      if (/\.pdf$/i.test(abs)) return pdfText(py, abs).then(part, e => 'ERROR: could not read text from that PDF: ' + e.message);
+      const t = asText(await readFile(abs));
+      if (t == null) return 'ERROR: ' + path + ' is not text (an image or other binary file), so it cannot be read ' +
+        'this way. An image the user attached is already shown to you in their message: look at it there.';
+      return part(t);
     },
     async write_file({ path, content }) {
-      const abs = jail(path);
+      const abs = await jail(path);
       // Being inside the project was not a limit at all: write_file could overwrite
       // backend/*.mjs, .claude/settings.json or a Skill. Only the live model and the
       // user's own working folder are legitimate write targets.
@@ -277,11 +319,13 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
       return 'wrote ' + relative(root, abs) + ' (' + content.length + ' bytes)';
     },
     async list_dir({ path }) {
-      return (await readdir(jail(path), { withFileTypes: true }))
+      return (await readdir(await jail(path), { withFileTypes: true }))
         .map(d => (d.isDirectory() ? d.name + '/' : d.name)).join('\n');
     },
-    async run_python({ code }) {
-      const file = join(scratch, 'run-' + Date.now() + '.py');
+    async run_python({ code, name }) {
+      const stem = scriptStem(name, code);
+      let file = join(scratch, stem + '.py');
+      for (let i = 2; existsSync(file); i++) file = join(scratch, `${stem}-${i}.py`);   // never over a file already there, the user's least of all
       await mkdir(dirname(file), { recursive: true });
       await writeFile(file, code);
       emit({ type: 'tools', tools: [{ name: 'python', input: { file: relative(root, file) } }] });
@@ -302,12 +346,14 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
       { name: { type: 'string',
                 enum: ['mca', 'tellurium', 'pathway-modeling'] } }, ['name']],
     ['read_file', 'Read a file in the project (e.g. a Skill reference, or ' + modelPath + ').',
-      { path: { type: 'string' } }, ['path']],
+      { path: { type: 'string' },
+        offset: { type: 'integer', description: 'characters to skip: only to read on past a result that said there was more' } }, ['path']],
     ['write_file', 'Write the live model at ' + modelPath + ', or a file in the working folder ' + scratch + '.',
       { path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']],
     ['list_dir', 'List a directory in the project.', { path: { type: 'string' } }, ['path']],
     ['run_python', 'Run Python with Tellurium available. Print what you need; only stdout comes back.',
-      { code: { type: 'string' } }, ['code']],
+      { name: { type: 'string', description: 'file name saying what the script does, e.g. steady-state-solver' },
+        code: { type: 'string' } }, ['code']],
   ];
 
   return {
@@ -325,7 +371,7 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
    Answered from this loop's own transcript, not the turn's `loaded` set: a workflow
    stage starts from a fresh transcript and must still get the Skill. */
 const skillIn = (messages, name) =>
-  messages.some(m => String(m.content ?? '').includes('\nname: ' + name + '\n'));
+  messages.some(m => String(m.content?.[0]?.text ?? m.content ?? '').includes('\nname: ' + name + '\n'));
 const reload = (messages, name, args) => name === 'load_skill' && skillIn(messages, args?.name)
   ? 'The ' + args.name + ' Skill is already loaded above in this conversation; use that ' +
     'text. Do not load it again. To go deeper, read_file one of its reference files.'
@@ -348,8 +394,19 @@ async function steer(rt, tools, messages, recent, step, emit, cap) {
     add += '\n\n[router] loaded the ' + name + ' Skill for you; do not load it again.\n\n' +
       String(await callTool(tools.impl, 'load_skill', { name })).slice(0, cap);
   }
-  if (add) messages.at(-1).content += add;
+  // a question with photos is [text part, image parts]: `+=` on that array sent the model "[object Object],[object Object]"
+  const last = messages.at(-1);
+  if (add) Array.isArray(last.content) ? (last.content[0].text += add) : (last.content += add);
 }
+
+/* One tool call, the same in a stage and in the outer turn: refused (missing
+   arguments, a Skill reload, the model gate) or run, then recorded. True if it failed. */
+const dispatcher = (lacks, run, tools, messages, recent, cap) => async (c, name, args) => {
+  const out = lacks(name, args) ?? reload(messages, name, args) ?? modelGate(run, tools.loaded, name === 'write_file' && tools.isModel(args.path)) ?? await run(name, args);
+  messages.push(toolResult(c, name, String(out).slice(0, cap)));
+  recent.push(recentLine(name, args, out));
+  return failed(recent.at(-1));
+};
 
 async function toolLoop({ chat, system, prompt, tools, schema, emit, signal,
                           maxSteps = 12, stageMs = 900000, cap = resultCap(), rt = {} }) {
@@ -358,7 +415,7 @@ async function toolLoop({ chat, system, prompt, tools, schema, emit, signal,
   if (rt.fn) await steer(rt, tools, messages, recent, 0, emit, cap);
   const t0 = Date.now();
   const run = toolRunner(tools.impl, WRITES);
-  const lacks = missingArgs(tools.defs);
+  const call = dispatcher(missingArgs(tools.defs), run, tools, messages, recent, cap);
   // A local 27B running seven sequential stages is slow but not dead — say so.
   const beat = setInterval(() => emit({ type: 'heartbeat', seconds: Math.round((Date.now()-t0)/1000) }), 15000);
   try {
@@ -376,12 +433,12 @@ async function toolLoop({ chat, system, prompt, tools, schema, emit, signal,
     // Ask for the schema only once the model has stopped calling tools; many local
     // models cannot emit a tool call and a constrained JSON object in one turn.
     const m = await chat.complete({ messages, tools: wrapUp ? undefined : tools.defs, signal,
-      onStream: ev => { if (ev.type === 'thinking' || ev.type === 'unthink') emit(ev); } });
+      onStream: quiet(emit) });
     messages.push(forHistory(m));
     const calls = m.tool_calls ?? [];
     if (!calls.length) {
       if (!schema) return m.content ?? '';
-      return await constrain({ chat, messages, schema, emit, signal });
+      return await constrain({ complete: a => chat.complete(a), messages, schema, emit, signal });
     }
     const had = tools.loaded.size;
     let bad = false;
@@ -390,55 +447,13 @@ async function toolLoop({ chat, system, prompt, tools, schema, emit, signal,
       let args = {};
       try { args = JSON.parse(c.function?.arguments || '{}'); } catch {}
       emit({ type: 'tools', tools: [{ name, input: args }] });
-      const out = lacks(name, args) ?? reload(messages, name, args) ?? modelGate(run, tools.loaded, name === 'write_file' && tools.isModel(args.path)) ?? await run(name, args);
-      messages.push(toolResult(c, name, String(out).slice(0, cap)));
-      recent.push(recentLine(name, args, out));
-      bad ||= failed(recent.at(-1));
+      bad = await call(c, name, args) || bad;
     }
     if (rt.fn && (bad || tools.loaded.size > had)) await steer(rt, tools, messages, recent, step + 1, emit, cap);
   }
   if (!schema) return '(the model kept calling tools without answering)';
-  return await constrain({ chat, messages, schema, emit, signal });
+  return await constrain({ complete: a => chat.complete(a), messages, schema, emit, signal });
   } finally { clearInterval(beat); }
-}
-
-/** Force the structured object the workflow stage declared. */
-async function constrain({ chat, messages, schema, emit, signal }) {
-  const ask = { role: 'user', content:
-    'Now output ONLY a JSON object matching the required schema for this stage. No prose, no code fences.' };
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let m;
-    const quiet = { onStream: ev => { if (ev.type === 'thinking' || ev.type === 'unthink') emit(ev); } };
-    try { m = await chat.complete({ messages: [...messages, ask], schema, signal, ...quiet }); }
-    catch (e) {
-      if (e?.name === 'AbortError') throw e;
-      m = await chat.complete({ messages: [...messages, ask], signal, ...quiet }); // no json_schema support
-    }
-    const parsed = parseLoose(m.content);
-    if (parsed && typeof parsed === 'object') return fill(parsed, schema);
-    messages.push(forHistory(m),
-                  { role: 'user', content: 'That was not valid JSON. Output the JSON object only.' });
-  }
-  return fill({}, schema);            // never crash the workflow on a weak model
-}
-
-function parseLoose(text) {
-  if (!text) return null;
-  const t = String(text).replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '').trim();
-  try { return JSON.parse(t); } catch {}
-  const a = t.indexOf('{'), b = t.lastIndexOf('}');
-  if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch {} }
-  return null;
-}
-
-/** A missing required field must not throw inside the workflow's own template strings. */
-function fill(obj, schema) {
-  for (const k of schema.required ?? []) {
-    if (obj[k] !== undefined && obj[k] !== null) continue;
-    const t = schema.properties?.[k]?.type;
-    obj[k] = t === 'array' ? [] : t === 'boolean' ? false : t === 'object' ? {} : '';
-  }
-  return obj;
 }
 
 /* --------------------------- the workflow, verbatim --------------------------- */
@@ -467,6 +482,13 @@ const TOOL_NAMES = ['load_skill', 'read_file', 'write_file', 'list_dir', 'run_py
 
 const DEFAULT_MODEL_PATH = 'workspace/model.txt';
 
+/* The file a run_python script is kept as. The working folder is the user's, so it
+   should read like their own work: the name the model gave, else the script's first
+   comment line, else (a model that gave neither) the old timestamp. */
+export const scriptStem = (name, code) =>
+  String(name || /^\s*#(?!!)\s*(.+)/m.exec(code ?? '')?.[1] || '').toLowerCase().replace(/\.py$/, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'run-' + Date.now();
+
 /* The file tools resolve paths from the install root, but run_python runs in the
    working folder (the open project's own folder). With only relative paths to go
    on, qwen3.8:27b guessed the wrong folder and opened a stale model.txt without
@@ -491,7 +513,7 @@ const EXEC_NOTE =
 /* `summary` is the project's history.md, and on the server path `history` is empty:
    one copy of each past turn, never two. Seeing a turn both live and declared
    "settled, do not re-derive" is the defect that made a local model loop. */
-export function runLocalAgent({ root, prompt, history = [], chatCfg, useWorkflow = true,
+export function runLocalAgent({ root, prompt, images, history = [], chatCfg, useWorkflow = true,
                                liveModel = '', modelPath = DEFAULT_MODEL_PATH, te, onEvent, summary = '',
                                scratch = join(root, 'workspace/runs'), router = null }) {
   const ctrl = new AbortController();
@@ -568,11 +590,13 @@ export function runLocalAgent({ root, prompt, history = [], chatCfg, useWorkflow
         },
       }, defs: useWorkflow ? [...tools.defs, wfDef] : tools.defs };
 
-      const messages = [{ role: 'system', content: system }, ...history, userQuestion(prompt)];
+      // attached photos ride on the question itself, the OpenAI way; a model without vision refuses them
+      const messages = [{ role: 'system', content: system }, ...history, userQuestion(!images?.length ? prompt
+        : [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))])];
       const run = toolRunner(allTools.impl, WRITES);
-      const lacks = missingArgs(allTools.defs);
       let final = '', usedTools = false, computed = false;
       const recent = [];
+      const call = dispatcher(missingArgs(allTools.defs), run, tools, messages, recent, cap);
       if (rt.fn) await steer(rt, tools, messages, recent, 0, emit, cap);
       const STEPS = stepBudget(chat.steps);
       for (let step = 0; step < STEPS; step++) {
@@ -599,14 +623,11 @@ export function runLocalAgent({ root, prompt, history = [], chatCfg, useWorkflow
           if (name !== 'run_mca_workflow') emit({ type: 'tools', tools: [{ name, input: a }] });
           else emit({ type: 'tools', tools: [{ name: 'Workflow', input: { workflow: 'mca-tellurium' } }] });
           if (COMPUTES.has(name)) computed = true;
-          const out = lacks(name, a) ?? reload(messages, name, a) ?? modelGate(run, tools.loaded, name === 'write_file' && tools.isModel(a.path)) ?? await run(name, a);
-          messages.push(toolResult(c, name, String(out).slice(0, cap)));
-          recent.push(recentLine(name, a, out));
-          bad ||= failed(recent.at(-1));
+          bad = await call(c, name, a) || bad;
         }
         if (rt.fn && (bad || tools.loaded.size > had)) await steer(rt, tools, messages, recent, step + 1, emit, cap);
       }
-      emit({ type: 'result', text: final || '(the model produced no final answer)',
+      emit({ type: 'result', text: final || NO_ANSWER,
              isError: !final, noTools: !usedTools, unverified: !computed && hasNumber(final) });
       emit({ type: 'done', code: 0 });
     } catch (e) {

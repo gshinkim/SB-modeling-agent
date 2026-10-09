@@ -1,0 +1,121 @@
+/* Analysis notebook (analysis.mjs): the four steps, heatmaps, scan chart,
+   Time course footer stats and the Outline pane. Colours come from app.css tokens. */
+
+/* ---------- step shell ---------- */
+.an-step{border-top:1px solid var(--border);padding:18px 0}
+.an-step:last-child{border-bottom:1px solid var(--border);padding-bottom:22px}
+.an-hd{display:grid;grid-template-columns:minmax(0,1fr) auto 24px;align-items:center;gap:16px;
+       width:100%;padding:0;border:0;background:none;text-align:left;cursor:pointer}
+.an-hd[disabled]{cursor:default}
+.an-tt{display:flex;flex-direction:column;min-width:0}
+.an-title{font-size:17px;font-weight:600}
+.an-sub{font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.an-chev{color:var(--muted);transition:transform .15s}
+.an-step.open .an-chev{transform:rotate(90deg)}
+.an-step.locked .an-title{color:var(--faint)}
+.an-body{padding:16px 0 0;display:flex;flex-direction:column;gap:16px}
+.an-dl{justify-content:flex-end;margin-bottom:14px}
+
+/* ---------- shared bits ---------- */
+.an-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.an-between{justify-content:space-between;gap:12px}
+.an-grow{flex:1}
+.an-note{margin:0;font-size:13px;color:var(--muted);line-height:1.5;max-width:640px}
+.an-text{margin:0;font-size:14px;color:var(--ink-2);line-height:1.55;max-width:620px;text-wrap:pretty}
+.an-cap{margin:0;font-size:12px;color:var(--muted)}
+.an-good{color:var(--good-ink)}
+.an-bad{color:var(--crit)}
+.an-lbl{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted)}
+.an-lbl .field{width:auto;min-width:150px;font-weight:400;color:var(--ink)}
+.an-step .strong,.an-chart .strong{font-weight:600}
+.an-step .muted{color:var(--muted)}
+
+.an-err{display:grid;grid-template-columns:20px minmax(0,1fr);gap:12px;max-width:640px;
+        padding:16px 18px;border-radius:8px;background:var(--crit-bg);color:var(--crit)}
+.an-err-t{font-size:14px;font-weight:600;color:var(--crit-ink)}
+.an-err-b{margin-top:6px;font-size:13px;color:var(--ink-2);line-height:1.55;overflow-wrap:anywhere}
+.an-err .an-row{margin-top:10px}
+
+/* ---------- 01 import ---------- */
+.an-empty{border:1px dashed var(--axis);border-radius:8px;padding:28px 24px;
+          display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+.an-empty-t{font-size:15px;font-weight:600}
+.an-empty-b{font-size:13px;color:var(--muted);line-height:1.5;max-width:520px;text-wrap:pretty}
+.an-tiles{display:flex;gap:36px;flex-wrap:wrap}
+.an-tile-v{font-size:22px;font-weight:600;line-height:1.2}
+.an-tile-k{font-size:12px;color:var(--muted)}
+.an-rxns{font-size:13px;overflow-x:auto;white-space:nowrap}
+.an-links{display:flex;gap:20px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--ink-2)}
+.an-links .mono{font-size:12px;color:var(--muted)}
+.an-links a{color:var(--accent)}
+
+/* ---------- tables and heatmaps ---------- */
+.an-scroll{overflow-x:auto}
+.an-table{width:100%;border-collapse:collapse;font-size:13px}
+.an-table th{padding:8px 0;text-align:left;font-size:12px;font-weight:600;color:var(--muted);
+             border-bottom:1px solid var(--border-2);white-space:nowrap}
+.an-table td{padding:9px 0;border-bottom:1px solid var(--grid)}
+.an-table .r{text-align:right}
+.an-table .c{text-align:center}
+.an-table .pad{padding-left:24px}
+.an-heat th.c,.an-heat td.c{padding-left:10px;padding-right:10px;min-width:64px}
+.an-heat td:first-child,.an-heat th:first-child{padding-right:16px;white-space:nowrap}
+.an-line{font-size:13px;color:var(--ink-2)}
+.an-flux{display:flex;gap:8px 24px;flex-wrap:wrap;font-size:13px}
+
+/* ---------- 03 control ---------- */
+.an-seg{display:flex;padding:3px;background:var(--grid);border-radius:7px}
+.an-seg button{height:30px;padding:0 14px;border:0;border-radius:5px;background:transparent;
+               color:var(--muted);font-size:13px;font-weight:600;cursor:pointer}
+.an-seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px color-mix(in srgb, var(--ink) 14%, transparent)}
+.an-theorem{font-size:13px;color:var(--ink-2)}
+.an-bars{display:flex;flex-direction:column;gap:10px}
+.an-bar{display:grid;grid-template-columns:minmax(80px,200px) minmax(0,1fr) 72px;align-items:center;gap:14px}
+.an-bar-n{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.an-bar-t{height:18px;background:var(--subtle);border-radius:3px;overflow:hidden}
+.an-bar-f{height:100%;border-radius:3px;background:var(--accent-dim)}
+.an-bar.top .an-bar-f{background:var(--accent)}
+/* negative control: the same orange the heatmaps use for negative values */
+.an-bar.neg .an-bar-f{background:oklch(0.75 0.12 50 / .55)}
+.an-bar.neg.top .an-bar-f{background:oklch(0.7 0.15 50)}
+.an-bar-v{font-size:14px;text-align:right}
+.an-bar.top .an-bar-v{font-weight:600}
+
+/* ---------- 04 scan ---------- */
+.an-ctl{display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap}
+.an-opts{display:flex;align-items:center;gap:8px;font-weight:400}
+.an-opts .field{min-width:0;width:88px}
+.an-run{height:38px;padding:0 20px;font-weight:600}
+.an-prog{display:flex;flex-direction:column;gap:8px;max-width:600px}
+.an-prog-l{display:flex;justify-content:space-between;font-size:13px;color:var(--ink-2)}
+.an-prog-t{height:4px;border-radius:2px;background:var(--border);overflow:hidden}
+.an-prog-t>div{height:100%;background:var(--accent)}
+.an-chart-hd{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:13px;margin-bottom:6px}
+.an-chart svg{width:100%;height:auto;display:block}
+.an-chart .ax{stroke:var(--border-2)}
+.an-chart .dash{stroke-dasharray:3 4}
+.an-chart .ln{fill:none;stroke:var(--accent);stroke-width:2.5;stroke-linejoin:round}
+.an-chart .pt{fill:var(--accent)}
+.an-chart .base{fill:var(--surface);stroke:var(--accent);stroke-width:2}
+.an-chart text{font:11px var(--mono);fill:var(--muted)}
+.an-chart text.lbl{font-family:var(--font);fill:var(--ink-2)}
+
+
+/* ---------- time course footer ---------- */
+.an-stats{display:flex;gap:8px 28px;flex-wrap:wrap;align-items:center}
+.an-stat-v{font-size:16px;font-weight:600}
+.an-stat-k{font-size:12px;color:var(--muted)}
+.an-stat-m{font-size:13px}
+.an-stat-m.muted{color:var(--muted)}
+
+/* ---------- outline pane ---------- */
+.an-out{display:flex;gap:12px;align-items:flex-start;width:100%;padding:10px 8px;border:0;border-radius:6px;
+        background:none;text-align:left;cursor:pointer}
+.an-out:hover{background:var(--hover, var(--subtle))}
+.an-out-n{font:12px var(--mono);color:var(--muted);margin-top:2px}
+.an-out-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+.an-out-l{font-size:14px;font-weight:600;color:var(--ink)}
+.an-out-s{font-size:12px;color:var(--muted)}
+.an-out-s.bad{color:var(--crit)}
+
+.an-err .btn:not(.primary){color:var(--ink)}

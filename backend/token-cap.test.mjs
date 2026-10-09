@@ -108,9 +108,10 @@ const listen = s => new Promise(r => s.listen(0, '127.0.0.1', r));
   console.log('call after tools closed -> prose ok');
 }
 
-/* LM Studio with the model not loaded: load it ourselves at 32768 instead of
-   letting the chat request JIT-load it at 8192 (measured: HTTP 400 on the first
-   Skill load, every turn). */
+/* LM Studio with the model not loaded: load it ourselves, at the model's maximum,
+   instead of letting the chat request JIT-load it at 8192 (measured: HTTP 400 on the
+   first Skill load, every turn). Halving on a refusal and reading back the window
+   LM Studio really gave are in local-agent.test.mjs. */
 {
   const seen = [], loads = [];
   const srv = createServer((req, res) => {
@@ -130,9 +131,9 @@ const listen = s => new Promise(r => s.listen(0, '127.0.0.1', r));
   await listen(srv);
   const chat = new Chat({ baseUrl: 'http://127.0.0.1:' + srv.address().port, model: 'qm' });
   await chat.complete({ messages: [{ role: 'user', content: 'q' }] });
-  assert.deepEqual(loads, [{ model: 'qm', context_length: 32768 }]);
-  assert.equal(chat.ctx, 32768);
-  assert.equal(seen[0].max_tokens, 16384);
+  assert.deepEqual(loads, [{ model: 'qm', context_length: 262144 }]);
+  assert.equal(chat.ctx, 262144);
+  assert.equal(seen[0].max_tokens, 131072);
   srv.close();
   console.log('LM Studio model loaded at a usable context ok');
 }
