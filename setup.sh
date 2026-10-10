@@ -11,15 +11,15 @@ fi
 
 # The version is asked of the interpreter, not read off its name: Windows has only
 # `python` and the `py` launcher, and `python` there can be the Store stub that runs nothing.
-# $c is left unquoted on purpose, "py -3.12" is a command and its argument.
+# $c is left unquoted on purpose, "py -3.14" is a command and its argument.
 PY=""
-for c in python3.12 python3.11 python3.10 python3 python "py -3.12" "py -3.11" "py -3.10"; do
-  $c -c 'import sys; sys.exit(not (3,10) <= sys.version_info[:2] <= (3,12))' >/dev/null 2>&1 && { PY="$c"; break; }
+for c in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python "py -3.14" "py -3.13" "py -3.12" "py -3.11" "py -3.10"; do
+  $c -c 'import sys; sys.exit(not (3,10) <= sys.version_info[:2] <= (3,14))' >/dev/null 2>&1 && { PY="$c"; break; }
 done
 if [ -z "$PY" ]; then
-  echo "Need Python 3.10-3.12 for Tellurium (roadrunner has no wheels for 3.13+)."
-  echo "  macOS: brew install python@3.12    Ubuntu/Debian: sudo apt install python3.12 python3.12-venv"
-  echo "  Windows: winget install Python.Python.3.12"
+  echo "Need Python 3.10-3.14 for Tellurium."
+  echo "  macOS: brew install python@3.14    Ubuntu/Debian: sudo apt install python3.14 python3.14-venv"
+  echo "  Windows: winget install Python.Python.3.14"
   exit 1
 fi
 
@@ -55,7 +55,7 @@ if [ "${SKIP_LAYLA:-}" != 1 ]; then
   if [ ! -f "$LAYLA/checkpoint/model.safetensors" ]; then
     echo "Downloading Layla's weights (about 800 MB)..."
     # a failed or cut-off download must not leave half a checkpoint that looks installed
-    curl -fL --retry 3 "$LAYLA_WEIGHTS" | tar -x -C "$LAYLA" || { rm -rf "$LAYLA/checkpoint"
+    curl -fL --http1.1 --retry 3 "$LAYLA_WEIGHTS" | tar -x -C "$LAYLA" || { rm -rf "$LAYLA/checkpoint"
       echo "WARNING: could not download Layla's weights. Rerun ./setup.sh to try again (or SKIP_LAYLA=1 to continue without the router)."; }
   fi
 fi

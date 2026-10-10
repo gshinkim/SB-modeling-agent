@@ -6,15 +6,14 @@ read, edit, run and analyse the model the same way you can.
 
 ## Install and run
 
-Runs on macOS, Linux and Windows. You need Git, Node.js 20+, Python 3.10–3.12
-(not 3.13: roadrunner has no wheels for it), and Claude Code for the AI panel. The
-rest of the app works without Claude Code.
+Runs on macOS, Linux and Windows. You need Git, Node.js 20+, Python 3.10–3.14, and
+Claude Code for the AI panel. The rest of the app works without Claude Code.
 
 | | macOS | Linux (Debian/Ubuntu) | Windows |
 |---|---|---|---|
 | Git | `xcode-select --install` | `sudo apt install git curl` | `winget install Git.Git` |
 | Node.js 20+ | `brew install node` | [nodejs.org](https://nodejs.org) or your package manager | `winget install OpenJS.NodeJS.LTS` |
-| Python | `brew install python@3.12` | `sudo apt install python3.12 python3.12-venv` | `winget install Python.Python.3.12` |
+| Python | `brew install python@3.14` | `sudo apt install python3.14 python3.14-venv` | `winget install Python.Python.3.14` |
 | Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` | `curl -fsSL https://claude.ai/install.sh \| bash` | PowerShell: `irm https://claude.ai/install.ps1 \| iex` |
 
 Run `claude` once and log in.
@@ -22,8 +21,8 @@ Run `claude` once and log in.
 Then, on macOS or Linux:
 
 ```bash
-git clone https://github.com/gshinkim/MCA-Agent.git
-cd MCA-Agent
+git clone https://github.com/gshinkim/SB-modeling-agent.git
+cd SB-modeling-agent
 bash setup.sh     # once: Python venv, Tellurium, the Layla router and its weights
 bash run.sh       # open http://127.0.0.1:5173
 ```
@@ -31,8 +30,8 @@ bash run.sh       # open http://127.0.0.1:5173
 On Windows, in PowerShell or cmd:
 
 ```powershell
-git clone https://github.com/gshinkim/MCA-Agent.git
-cd MCA-Agent
+git clone https://github.com/gshinkim/SB-modeling-agent.git
+cd SB-modeling-agent
 .\setup.cmd       # once
 .\run.cmd         # open http://127.0.0.1:5173
 ```
@@ -70,7 +69,7 @@ To update the tools themselves:
 |---|---|---|---|
 | Claude Code | `claude update` | `claude update` | `claude update` |
 | Node.js | `brew upgrade node` | your package manager | `winget upgrade OpenJS.NodeJS.LTS` |
-| Python | stay on 3.10–3.12 | stay on 3.10–3.12 | stay on 3.10–3.12 |
+| Python | stay on 3.10–3.14 | stay on 3.10–3.14 | stay on 3.10–3.14 |
 
 If you change the Python version, delete `.venv` and rerun `bash setup.sh`.
 
@@ -300,7 +299,7 @@ plotted series as CSV. Past eight series identity moves to a second channel
 
 ## Notes
 
-- Tellurium needs Python 3.10–3.12; roadrunner has no wheels for 3.13+. `setup.sh`
+- Tellurium 2.2.13.1 (libroadrunner 2.10.0) runs on Python 3.10–3.14. `setup.sh`
   picks a compatible interpreter and keeps it in `.venv`.
 - The Python worker stays warm because `import tellurium` costs seconds and the UI
   simulates on every edit.
