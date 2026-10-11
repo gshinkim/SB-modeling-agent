@@ -1,11 +1,7 @@
 /* node backend/sessions.test.mjs */
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { slug } from './sessions.mjs';
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const CASES = [
   ['Glycolysis v2',      'Glycolysis-v2'],
@@ -19,14 +15,6 @@ const CASES = [
 
 {
   for (const [input, want] of CASES) assert.equal(slug(input), want, JSON.stringify(input));
-}
-
-{
-  // the browser copy and the server copy must not drift
-  const src = await readFile(join(ROOT, 'web/js/util.mjs'), 'utf8');
-  const { slug: browserSlug } = await import('../web/js/util.mjs');
-  assert.ok(/export const slug/.test(src), 'util.mjs must export slug');
-  for (const [input, want] of CASES) assert.equal(browserSlug(input), want, 'browser: ' + input);
 }
 
 {
@@ -399,4 +387,40 @@ console.log('sessions history fold ok');
   await release();
   assert.equal(await ls(old).catch(() => null), null, 'the link goes when the turn ends');
   console.log('sessions rename mid-turn ok');
+}
+
+/* A turn's memory as turn.mjs uses it, two calls: beginTurn holds the folder and returns
+   the memory; end() writes the turn into the renamed folder, lets the link go, then
+   summarises the thinking and folds, in that order. A turn that never started records nothing. */
+{
+  const { mkdtemp, readFile: rf, lstat: ls } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { saveSession, beginTurn, appendHistory, parseHistory, HISTORY, sessionDir } = await import('./sessions.mjs');
+  const work = await mkdtemp(join(tmpdir(), 'mca-turn-'));
+  const { id } = await saveSession(work, { name: 'One', fresh: true });
+  const old = await sessionDir(work, id);
+  await appendHistory(old, ['- **user:** earlier']);
+  const order = []; let again;
+  const mem = await beginTurn(old, {
+    shorten: async () => { order.push('shorten'); return 'short'; },
+    // the old name is taken by a new project while the fold is still out at the model
+    compact: async () => { order.push('compact'); again = await sessionDir(work, (await saveSession(work, { name: 'One', fresh: true })).id);
+                           return 'S' + ' w'.repeat(60); } });
+  assert.match(mem.memory, /earlier/);
+  const now = await sessionDir(work, (await saveSession(work, { id, name: 'Two' })).id);
+  await mem.end('q', 'w '.repeat(1200), 'w '.repeat(1200));               // long enough to fold
+  assert.equal(await ls(old).catch(() => null), null, 'the link goes when the turn ends');
+  assert.equal(parseHistory(await rf(join(now, HISTORY), 'utf8')).lines.length, 4, 'written before end() returns');
+  for (let i = 0; i < 400 && !parseHistory(await rf(join(now, HISTORY), 'utf8')).summary; i++) await new Promise(r => setTimeout(r, 5));
+  assert.deepEqual(order, ['shorten', 'compact']);
+  assert.equal(parseHistory(await rf(join(now, HISTORY), 'utf8')).summary.split(' ')[0], 'S', 'the fold reached the renamed folder');
+  assert.match(await rf(join(now, 'history.prev.md'), 'utf8'), /thinking:\*\* short\n/, 'summarised before the fold');
+
+  // its memory is its own: neither the renamed project's history nor its late fold
+  assert.equal(again, old);
+  const idle = await beginTurn(again);
+  assert.deepEqual(parseHistory(idle.memory), { summary: '', lines: [] });
+  await idle.end();                                               // stopped before the agent started
+  assert.deepEqual(parseHistory(await rf(join(again, HISTORY), 'utf8')), { summary: '', lines: [] });
+  console.log('sessions turn memory ok');
 }

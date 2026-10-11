@@ -3,17 +3,14 @@
    memory), and whatever files the AI wrote. The folder list IS the session list — there is no
    index to fall out of sync with the directory. */
 
-/** Filesystem-safe name. Must stay identical to slug() in web/js/util.mjs;
-    backend/sessions.test.mjs pins the two together. */
-export const slug = s => String(s).replace(/[\/\\:*?"<>|\x00-\x1f]/g, '').replace(/\s+/g, '-')
-                                  .replace(/^[.\-]+|[.\-]+$/g, '').slice(0, 80);
-
+import { slug } from '../web/js/util.mjs';   // one filesystem-safe name for both tiers
+export { slug };
 import { realpath, readFile, writeFile, mkdir, readdir, rename, stat, rm, symlink, lstat, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve, sep, join } from 'node:path';
+import { resolve, sep, join, basename } from 'node:path';
 
 /* A session id is a folder name derived from something the user typed, and
-   deleteSession() removes a tree. Resolve it and prove it is inside runs/ before
+   deleteSession() removes a tree. Resolve it and prove it is inside workspace/ before
    anything touches the filesystem — including through a symlink, which resolve()
    alone does not see.
 
@@ -34,13 +31,13 @@ export async function sessionDir(runsRoot, id) {
 
   const rawDir = resolve(root, String(id));
   if (rawDir === root || !(rawDir + sep).startsWith(root + sep))
-    throw new Error('session path outside runs/');
+    throw new Error('session path outside workspace/');
 
   const dir = resolve(root, name);
-  if (dir === root || !dir.startsWith(root + sep)) throw new Error('session path outside runs/');
+  if (dir === root || !dir.startsWith(root + sep)) throw new Error('session path outside workspace/');
   // an existing entry may be a symlink out of the tree; a missing one cannot be
   const real = await realpath(dir).catch(() => null);
-  if (real && real !== dir && !real.startsWith(root + sep)) throw new Error('session path outside runs/');
+  if (real && real !== dir && !real.startsWith(root + sep)) throw new Error('session path outside workspace/');
   return dir;
 }
 
@@ -84,6 +81,9 @@ export async function listSessions(runsRoot) {
    ponytail: in-process only; a server restart mid-turn forgets the moves. */
 const moved = new Map(), held = new Map();
 export const follow = dir => { const seen = new Set(); while (moved.has(dir) && !seen.has(dir)) { seen.add(dir); dir = moved.get(dir); } return dir; };
+/** follow() for a caller that holds a project's id, not its path (live.mjs): the id is
+    the folder's name. ponytail: by name alone, so one workspace root per process. */
+export const followId = id => { for (const from of moved.keys()) if (basename(from) === id) return basename(follow(from)); return id; };
 
 export function holdDir(dir) {
   held.set(dir, (held.get(dir) ?? 0) + 1);
@@ -112,8 +112,11 @@ async function claimId(runsRoot, want, keep, srcDir) {
     if (id === keep) return { id, dir: srcDir };
     const target = await sessionDir(runsRoot, id);
     try {
-      if (srcExists) { await rename(srcDir, target); await recordMove(srcDir, target); }
-      else await mkdir(target);
+      if (srcExists) await rename(srcDir, target); else await mkdir(target);
+      // a folder is here now: a move away from this path, made earlier, is over, or this
+      // project's history would follow it into the one that left
+      moved.delete(target);
+      if (srcExists) await recordMove(srcDir, target);
       return { id, dir: target };
     } catch (err) {
       // taken since the check — try the next id (Windows reports a taken name as EPERM)
@@ -271,32 +274,30 @@ export async function foldHistory({ summary, lines }, compact) {
 
 /* Reads and appends on the same project must not interleave: an append that starts
    mid-read (or two overlapping appends) can fold from a stale snapshot and drop a
-   turn. `serial` chains every call for a given folder onto the previous one, so the
-   next turn's readHistory waits for the previous append to finish writing. One
-   queue per directory, not global, so unrelated projects never wait on each other.
-   ponytail: an in-process Map — fine for a single server; a second process (or a
+   turn. `serial` chains every call onto the previous one, so the
+   next turn's readHistory waits for the previous append to finish writing.
+   ponytail: in-process — fine for a single server; a second process (or a
    restart mid-write) isn't covered, add a lockfile if that ever matters. */
-const locks = new Map();
 /* One queue for all history reads and writes, not one per folder: a folder's path
    changes when it is renamed, and a per-path queue let an op on the old path and one
    on the new path interleave. Every op under it is a quick read or write — the slow
    model call in compressHistory runs outside it. */
 let queue = Promise.resolve();
-const serial = (_dir, fn) => {
+const serial = fn => {
   const p = queue.then(fn, fn);
   queue = p.catch(() => {});
   return p;
 };
 
 const rawHistory = dir => readFile(join(dir, HISTORY), 'utf8').catch(() => '');
-export const readHistory = dir => serial(dir, () => rawHistory(follow(dir)));
+export const readHistory = dir => serial(() => rawHistory(follow(dir)));
 
 /* A turn that outlives its project (deleted, or renamed while running — see server.mjs's
    Stop handling) must not resurrect a stub folder holding only history.md: that folder
    has no session.json, so it is invisible to the picker and never gets cleaned up. Only
    write when the project's session.json is still there. Uses rawHistory, not readHistory:
    calling the serial-wrapped version from inside this same queue would await its own turn. */
-export const appendHistory = (dir, newLines) => serial(dir, async () => {
+export const appendHistory = (dir, newLines) => serial(async () => {
   dir = follow(dir);                                  // renamed since the turn began
   if (!existsSync(join(dir, META))) return '';        // project deleted mid-turn
   const h = parseHistory(await rawHistory(dir));
@@ -314,7 +315,7 @@ export async function summariseThinking(dir, thinking, shorten) {
   if (!shorten || flat.length <= THINKING_CAP) return;
   const next = oneLine(await shorten(flat).catch(() => '')).slice(0, THINKING_CAP);
   if (!next) return;
-  await serial(dir, async () => {
+  await serial(async () => {
     const d = follow(dir);
     if (!existsSync(join(d, META))) return;            // deleted meanwhile
     const text = await rawHistory(d), at = text.lastIndexOf(old + '\n');
@@ -333,15 +334,16 @@ export async function compressHistory(dir, compact) {
   if (folding.has(key)) return;                       // one fold per project at a time
   folding.add(key);
   try {
-    const h = await serial(dir, async () => {
-      const d = follow(dir);
+    // from `key`, not `dir`: once the project has left `dir`, a new one may take that name
+    const h = await serial(async () => {
+      const d = follow(key);
       return existsSync(join(d, META)) ? parseHistory(await rawHistory(d)) : null;
     });
     if (!h) return;
     const next = await foldHistory(h, compact);        // slow; outside the queue
     if (next.summary === h.summary) return;            // under the threshold, or the fold failed
-    await serial(dir, async () => {
-      const d = follow(dir);
+    await serial(async () => {
+      const d = follow(key);
       if (!existsSync(join(d, META))) return;          // deleted meanwhile
       const now = parseHistory(await rawHistory(d));
       if (now.summary !== h.summary) return;           // folded by someone else meanwhile
@@ -351,4 +353,25 @@ export async function compressHistory(dir, compact) {
                                                         lines: now.lines.slice(h.lines.length) }));
     });
   } finally { folding.delete(key); }
+}
+
+/* A turn's whole use of the project's memory, so the order is kept here and not by the
+   caller: the folder is held from before the agent starts (it may be renamed meanwhile),
+   `memory` is what the agent is told, and end() writes the turn at once, lets the folder
+   go, then summarises the thinking and folds in the background — neither the chat nor
+   the next turn waits for the model. end() with nothing to record (the turn never
+   started) only lets the folder go. Persisting memory must never fail the turn. */
+export async function beginTurn(dir, { compact, shorten } = {}) {
+  const release = holdDir(dir);
+  return { memory: await readHistory(dir), end: async (prompt, thinking, answer) => {
+    const lines = turnLines(prompt, thinking, answer);
+    if (lines.length) await appendHistory(dir, lines).catch(e => console.error('[history]', e.message));
+    const now = follow(dir);   // looked up while still held: once let go, the old name is free for another project
+    await release();
+    // One after the other, not both at once: a local server has one GPU.
+    if (lines.length) summariseThinking(now, thinking, shorten)
+      .catch(e => console.error('[history thinking]', e.message))
+      .then(() => compressHistory(now, compact))
+      .catch(e => console.error('[history fold]', e.message));
+  } };
 }

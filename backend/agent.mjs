@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FORMAT } from '../web/js/prompt.mjs';
+import { FORMAT, WORKFLOW_OFF, summaryBlock } from '../web/js/prompt.mjs';
 import { logLine, hintLine, autoBlock } from './router.mjs';
 import { VENV_PY } from './tellurium.mjs';
 
@@ -63,9 +63,8 @@ ${src.trim()}
 export const NO_WORKFLOW = `
 ## Workflow disabled for this session
 
-The Workflow tool is NOT available and the ${WORKFLOW} workflow will not run. The
-user turned it off deliberately, because the full seven-stage sequence is slow.
-Do not ask for it back and do not refuse the work.
+The Workflow tool is NOT available and the ${WORKFLOW} workflow will not run.
+${WORKFLOW_OFF}
 
 Do the analysis directly instead, and keep every other rule in your definition:
 inspect the model before any claim about it, load a Skill with the Skill tool 
@@ -136,21 +135,6 @@ create belongs anywhere else. Write to it by absolute path. It is the user's fol
 so leave it readable: name files for what they are, not run-1234567890.py.
 The live model stays at workspace/model.txt - that one is still edited in place.`;
 
-/* The project's history.md. Inlined rather than pointed at: a model that has to
-   call a tool to find its own memory is a model that will sometimes not bother. */
-export const summaryBlock = text => !text?.trim() ? '' : `
-
-## Project history
-
-Your own record of this project: a summary of everything older, then the
-latest turns (what was asked, how you reasoned, what you answered). It is not
-a tool result: a number from it may be stale, and the live model may have
-changed since. Any number you report this turn comes from a tool call you
-make this turn.
-
-${text.trim()}
-`;
-
 /* In a project the live model is that project's own model.txt. The agent definition
    and the text above name workspace/model.txt throughout; point every mention at the
    project's file, and say so outright, so no edit lands in the default model. */
@@ -172,6 +156,9 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
     '--output-format', 'stream-json',
     '--verbose',
     '--include-partial-messages',
+    // Claude 5 models default to thinking blocks with empty text ("thinking_display":
+    // "updates"), which leaves the UI's thinking panel shut. Ask for the summary.
+    '--thinking-display', 'summarized',
     '--forward-subagent-text',            // surface the workflow subagents' reasoning too
     // A session id may only be *claimed* once; continuing one is --resume.
     ...(resuming ? ['--resume', sid] : ['--session-id', sid]),

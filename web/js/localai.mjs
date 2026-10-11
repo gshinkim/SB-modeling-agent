@@ -1,4 +1,4 @@
-import { readCompletion, fitMessages, CONTEXT_DEFAULT, replyTokens, SAMPLING, cutoffNudge, closedNote } from './oai.mjs';
+import { readCompletion, CONTEXT_DEFAULT, replyTokens, completion, v1Base } from './oai.mjs';
 
 /* Reaching a model server on the user's own machine from a hosted https page.
    Chrome 141+ gates this behind the Local Network Access permission, which only
@@ -64,7 +64,7 @@ export async function probe(baseUrl, apiKey){
   if (!baseUrl) return { status: 'offline', detail: 'No server URL set.' };
   const before = await permissionState();
   const t0 = performance.now();
-  const r = await ping(baseUrl, '/v1/models',
+  const r = await ping(v1Base(baseUrl), '/models',
     { headers: apiKey ? { authorization: 'Bearer ' + apiKey } : {} });
   const ms = performance.now() - t0;
 
@@ -100,59 +100,31 @@ export async function probe(baseUrl, apiKey){
             'this site. Run the one for your app, then press Connect again.' };
 }
 
-/** Chat completions against the user's own machine, streamed. `retried` is
-    internal: set once this already re-asked after a thinking-only cutoff, so
-    that retry cannot itself loop forever. */
-export async function localChat(args){
-  const { baseUrl, apiKey, model, messages, tools, schema, signal,
-          onStream, contextTokens, replyPct, retried, closedTools } = args;
-  const base = baseUrl.replace(/\/+$/,'');
-  const url = (/\/v\d+$/.test(base) ? base : base + '/v1') + '/chat/completions';
+/** Chat completions against the user's own machine, streamed. `closedTools` are
+    the last tools offered, re-sent closed on the wrap-up (see completion in oai.mjs). */
+export async function localChat({ baseUrl, apiKey, model, messages, tools, schema, signal,
+                                  onStream, contextTokens, replyPct, closedTools }){
+  const url = v1Base(baseUrl) + '/chat/completions';
   // Sized to the window the runtime actually loaded, not to the weights' maximum:
   // asking for more than it holds truncates the prompt instead of lengthening the
   // answer, and that truncation is what made the model repeat itself. The reply
   // budget has to also be the fitMessages reserve — the server runtime does this
   // (backend/local-agent.mjs Chat.complete); without it the prompt could fill
   // ctx-1024 while max_tokens asked for another ctx/2, over-filling the window.
+  // ponytail: the window is the setting, not detected as on the server
+  // (Chat.detectContext); port that here if pages keep running on the wrong one.
   const ctx = Number(contextTokens) > 0 ? Number(contextTokens) : CONTEXT_DEFAULT;
-  const cap = replyTokens(ctx, replyPct);
-  // Closed tools are still sent (closedTools, the last ones offered), with the
-  // closing said in words, so the prompt prefix and the server's prompt cache
-  // survive the wrap-up — see Chat.complete in backend/local-agent.mjs.
-  const closed = !tools?.length && closedTools?.length && !schema;
-  const body = { model, messages: fitMessages(closed ? [...messages, closedNote] : messages, ctx, cap),
-                 stream: true, max_tokens: cap, ...SAMPLING };
-  if (tools?.length || closed) body.tools = tools?.length ? tools : closedTools;
-  else body.tool_choice = 'none';          // a server that honours it cannot emit a call
-  if (schema) body.response_format = { type:'json_schema',
-                                       json_schema:{ name:'result', strict:true, schema } };
   const space = spaceFor(url);
-  const res = await fetch(url, {
-    method: 'POST', signal,
-    ...(space ? { targetAddressSpace: space } : {}),
-    headers: { 'content-type':'application/json',
-               ...(apiKey ? { authorization: 'Bearer ' + apiKey } : {}) },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(model + ': HTTP ' + res.status + ' ' + (await res.text().catch(()=>'')).slice(0,200));
-  if (!res.body) throw new Error('no response body from ' + url);
-
-  const msg = await readCompletion(res, {
-    onStream, toolNames: (tools ?? []).map(t => t.function?.name) });
-
-  // Cut off mid-thought with nothing visible: the server runtime retries this
-  // (backend/local-agent.mjs Chat.complete); without it a hosted Qwen-class model
-  // spending its whole budget thinking came back as a blank bubble.
-  // a closed call is retried even with prose: see Chat.complete in backend/local-agent.mjs
-  if (!retried && (msg.closedCall || (msg.finish === 'length' && !msg.tool_calls?.length && !msg.content))) {
-    onStream?.({ type: 'log', text: model +
-      (msg.closedCall ? ' called a tool after tools were closed; asking it to answer.'
-                   : ' was cut off while thinking; asking it for its next move.') });
-    const second = await localChat({ ...args, retried: true,
-      messages: [...messages, ...cutoffNudge(msg, tools?.length)] });
-    return second.content || second.tool_calls?.length ? second : msg;
-  }
-  if (!msg.tool_calls?.length && msg.finish === 'length') onStream?.({ type:'log',
-    text: model + ' hit its token limit before finishing — the answer is cut off.' });
-  return msg;
+  return completion(async body => {
+    const res = await fetch(url, {
+      method: 'POST', signal,
+      ...(space ? { targetAddressSpace: space } : {}),
+      headers: { 'content-type':'application/json',
+                 ...(apiKey ? { authorization: 'Bearer ' + apiKey } : {}) },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(model + ': HTTP ' + res.status + ' ' + (await res.text().catch(()=>'')).slice(0,200));
+    if (!res.body) throw new Error('no response body from ' + url);
+    return readCompletion(res, { onStream, toolNames: (tools ?? []).map(t => t.function?.name) });
+  }, { model, messages, tools, closedTools, schema, ctx, cap: replyTokens(ctx, replyPct), onStream });
 }

@@ -1,26 +1,23 @@
 /* node backend/sessions-memory.test.mjs
-   Boots the real server (like sessions-routes.test.mjs) and a stub OpenAI-compatible
+   Boots the real server on a temp workspace (like sessions-routes.test.mjs) and a stub OpenAI-compatible
    server (like local-agent.test.mjs), then drives REAL turns through the real
    /api/chat SSE endpoint and checks history.md on disk — the call site, not just
    the pure foldHistory helper sessions.test.mjs already pins. */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFile, writeFile, rm, stat } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const WORK = join(ROOT, 'workspace');
+const WORK = await mkdtemp(join(tmpdir(), 'mca-ws-'));
 const PORT = 5197;
 const url = p => `http://127.0.0.1:${PORT}${p}`;
-const SID = 'test-memory-cycle';                 // must not collide with real user data
+const SID = 'test-memory-cycle';
 const SDIR = join(WORK, SID);
 const HISTORY_PATH = join(SDIR, 'history.md');
-
-const beforeModel = await readFile(join(WORK, 'model.txt'), 'utf8').catch(() => '');
-const beforeSettings = await readFile(join(WORK, 'settings.json'), 'utf8').catch(() => '');
-await rm(SDIR, { recursive: true, force: true });   // in case a previous failed run left it
 
 /* A stub OpenAI-compatible server. Two kinds of request land on it:
    - a turn request (has `tools`): answer immediately, echoing the live user prompt
@@ -59,7 +56,7 @@ await new Promise(r => stub.listen(0, '127.0.0.1', r));
 const stubUrl = 'http://127.0.0.1:' + stub.address().port;
 
 const srv = spawn('node', [join(ROOT, 'backend/server.mjs')],
-                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1' }, stdio: 'ignore' });
+                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1', MCA_WORKSPACE: WORK }, stdio: 'ignore' });
 const up = async () => { for (let i = 0; i < 60; i++) {
   if (await fetch(url('/api/health')).then(() => true).catch(() => false)) return;
   await new Promise(r => setTimeout(r, 150)); } throw new Error('server never came up'); };
@@ -157,7 +154,5 @@ try {
 } finally {
   srv.kill();
   stub.close();
-  await rm(SDIR, { recursive: true, force: true });
-  await writeFile(join(WORK, 'model.txt'), beforeModel);   // also when it was empty: a new project's model is
-  if (beforeSettings) await writeFile(join(WORK, 'settings.json'), beforeSettings);
+  await rm(WORK, { recursive: true, force: true });
 }

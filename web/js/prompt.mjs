@@ -140,3 +140,35 @@ export function localSystem({ tools, liveModel = '', modelPath = 'workspace/mode
     TEXT_TOOL_PROTOCOL,
   ].filter(Boolean).join('\n');
 }
+
+/* The workflow switched off, said the same way on every runtime: the orchestration is
+   skipped, the scientific discipline is not. */
+export const WORKFLOW_OFF = 'The user turned the seven-stage workflow off deliberately, ' +
+  'because it is slow. Do not ask for it back and do not refuse the work.';
+
+/** The workflow rule for a local runtime's outer turn (localSystem's `extra`). */
+export const workflowRule = on => on
+  ? '\n## The workflow\n\nAnything needing numbers — control, elasticities, control ' +
+    'coefficients, steady state in a control context — MUST go through `run_mca_workflow`. ' +
+    'Answer directly only for questions that need no computation.'
+  : '\n## The workflow is off\n\n' + WORKFLOW_OFF + ' Do the analysis yourself, ' +
+    'keeping every rule above.';
+
+/* The project's history.md. Inlined rather than pointed at: a model that has to
+   call a tool to find its own memory is a model that will sometimes not bother. */
+/* "Treat it as established; do not re-derive it" contradicted the rule that
+   every reported number comes from a tool call made this turn. Once the
+   history held a full answer to the question being asked again, qwen3.8:27b
+   obeyed the first rule: it called no tools and produced no answer. */
+export const summaryBlock = text => !text?.trim() ? '' : `
+
+## Project history
+
+Your own record of this project: a summary of everything older, then the
+latest turns. Use it for what was asked, decided and changed. It is not
+a tool result: a number from it may be stale, and the live model may have
+changed since. Any number you report this turn comes from a tool call you
+make this turn.
+
+${text.trim()}
+`;

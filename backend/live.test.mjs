@@ -1,7 +1,11 @@
 /* node --test backend/live.test.mjs — a turn outlives the page that started it. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { startLive, watchLive, liveMeta, stopLive } from './live.mjs';
+import { saveSession } from './sessions.mjs';
 
 test('closing the page does not stop the turn, and a page that comes back sees all of it', () => {
   let emit, end, stopped = 0;
@@ -40,4 +44,24 @@ test('only an explicit stop ends a turn, and a new turn replaces the running one
   startLive('r', {}, () => () => { stops++; });         // the first never ended: stopped again, then replaced
   assert.equal(stops, 2);
   stopLive('nope');                                     // no turn: nothing to do
+});
+
+test('a project renamed mid-turn keeps its turn, under the new id and the old one', async () => {
+  const work = await mkdtemp(join(tmpdir(), 'live-'));
+  const { id } = await saveSession(work, { name: 'Before', fresh: true });
+  let emit, stops = 0;
+  startLive(id, { q: 'x' }, e => { emit = e; return () => { stops++; }; });
+  const renamed = (await saveSession(work, { id, name: 'After' })).id;
+  assert.equal(renamed, 'After');
+  assert.deepEqual(liveMeta(renamed), { q: 'x' }, 'a reload asks by the new id');
+  const got = [];
+  watchLive(renamed, o => got.push(o));
+  emit({ type: 'delta', text: 'a' });
+  assert.deepEqual(got, [{ type: 'delta', text: 'a' }]);
+  stopLive(id);                                         // the page that started it still holds the old id
+  assert.equal(stops, 1);
+  // the old name, taken by a new project, does not inherit the turn
+  assert.equal((await saveSession(work, { name: 'Before', fresh: true })).id, 'Before');
+  assert.equal(liveMeta('Before'), null);
+  assert.deepEqual(liveMeta('After'), { q: 'x' });
 });

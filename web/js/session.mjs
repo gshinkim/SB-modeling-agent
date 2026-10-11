@@ -14,39 +14,56 @@ export const listSessions = () => fetch('/api/sessions').then(r => r.json())
   .then(r => r.sessions ?? []).catch(() => []);
 
 let getName = () => DEFAULT_NAME, getModel = () => '', getSettings = () => ({}),
-    getChats = () => [], setAll = () => {};
+    getChats = () => [], setAll = () => {}, stopTurn = () => {}, reset = () => {};
 
-/** Wire the module to the page once, at boot, rather than importing main.mjs back. */
-export function initSession(hooks) { ({ getName, getModel, getSettings, getChats, setAll } = hooks); }
+/** Wire the module to the page once, at boot, rather than importing main.mjs back.
+    `stopTurn(real)` ends the turn on screen (real false only leaves it: the server keeps
+    running it); `reset` puts the page's project name and chats back to an untouched project. */
+export function initSession(hooks) {
+  ({ getName, getModel, getSettings, getChats, setAll, stopTurn, reset } = hooks);
+}
 
 export const currentId = () => S.sessionDirId;
 
 /* Nothing has been touched and no folder exists: saving would create a folder for
    an untouched project. Also what stops a just-deleted project coming back from a
-   stray save — deleteCurrent() clears `touched` along with the folder id. */
+   stray save — deleteSessionById() clears `touched` along with the folder id. */
 let touched = false;
-export const touch = () => { touched = true; };
-export const worthSaving = (sessionDirId, isTouched) => sessionDirId != null || !!isTouched;
 
 /* Saves run one at a time: two first-saves in flight together would each claim a
    folder, leaving a stray Untitled-project-2 behind. */
 let chain = Promise.resolve();
-export const saveNow = () => (chain = chain.then(doSave, doSave));
+const saveNow = () => (chain = chain.then(doSave, doSave));
 
 /* Resolves once whatever save is currently in flight (a rename, a first save that's
    still claiming a folder id) has settled, success or failure — never rejects. A
    model PUT that races that save can land in the OLD id (rename) or in the shared
    default file (first save still pending); await this before it. */
-export const saveIdle = () => chain.catch(() => {});
+const saveIdle = () => chain.catch(() => {});
+
+/** The one call before a turn or a model write: resolves to the open project's folder
+    id once that folder exists and no save is in flight. Never rejects; null when there
+    is no folder (hosted, or the save failed). A turn's memory (history.md) and files go
+    in that folder, which must have its final name before the agent starts, so the
+    project is saved first. `rewrite` false is for a model write, which happens on every
+    slider move: it only creates a missing folder. */
+export async function savedId(rewrite = true) {
+  touched = true;
+  if (rewrite || S.sessionDirId == null) { cancelPending(); saveNow(); }
+  await saveIdle();
+  return S.sessionDirId;
+}
 
 async function doSave() {
   if (S.env?.hosted) return null;
-  if (!worthSaving(S.sessionDirId, touched)) return null;
-  const fresh = S.sessionDirId == null;
-  const id = S.sessionDirId ?? (slug(getName()) || slug(DEFAULT_NAME));
+  const was = S.sessionDirId, fresh = was == null;
+  if (fresh && !touched) return null;
+  const id = was ?? (slug(getName()) || slug(DEFAULT_NAME));
   const r = await post('/api/sessions/save', { id, fresh, name: getName(), chats: getChats(),
                                                settings: getSettings(), model: getModel() });
-  if (r.id) S.sessionDirId = r.id;      // a new folder or a rename comes back with its name
+  // a new folder or a rename comes back with its name; not if another project was
+  // opened while this was in flight, or the open one would take the old one's id
+  if (r.id && S.sessionDirId === was) S.sessionDirId = r.id;
   return r;
 }
 
@@ -54,17 +71,19 @@ async function doSave() {
    and the server keeps the running turn's paths working (sessions.mjs holdDir/follow).
    Holding it back made the rename land at the turn's end, mid-compression, and that
    turn's history was lost. `deleting`
-   blocks a save from being armed (or re-armed) while deleteCurrent() is in flight —
+   blocks a save from being armed (or re-armed) while deleteSessionById() is in flight —
    without it, a save timer set just before delete(), or one set by a stray caller
    DURING the delete's own await, can fire after the folder is gone and recreate it.
    It's a COUNTER, not a boolean: the confirm() button isn't disabled fast enough to
-   rule out two overlapping deleteCurrent() calls, and with a boolean the FIRST
+   rule out two overlapping deleteSessionById() calls, and with a boolean the FIRST
    call's finally would clear it while the SECOND call's post() is still pending,
-   reopening the window. Only the last delete to settle may re-enable saving. */
+   reopening the window. Only the last delete to settle may re-enable saving.
+   `touching` false saves a project that already has something to save and never
+   creates a folder (deleting a chat: an unsaved project has nothing on disk to update). */
 let t = null, scheduled = false, deleting = 0;
-export function saveSoon() {
+export function saveSoon(touching = true) {
   if (deleting > 0) return;             // a delete is in flight — never arm a save for it
-  touch();                              // every caller is a user action
+  if (touching) touched = true;         // every other caller is a user action
   clearTimeout(t);
   scheduled = true;
   t = setTimeout(() => { scheduled = false; saveNow(); }, 800);
@@ -73,23 +92,26 @@ export function saveSoon() {
 /* A debounce still outstanding targets whoever
    S.sessionDirId is RIGHT NOW. Call this before that changes, or the save either
    never happens (the old session silently loses its last turn/rename) or fires
-   after the switch and re-saves the wrong, now-current session. */
+   after the switch and re-saves the wrong, now-current session. A save already in
+   flight is waited for too: its answer carries a folder id, and landing after the
+   switch it would hand that id to the project opened since. */
 async function flushPending() {
-  if (!scheduled) return;
-  clearTimeout(t);
-  scheduled = false;
-  await saveNow();
+  if (scheduled) { cancelPending(); saveNow(); }
+  await saveIdle();
 }
 
 /* Same triggers as flushPending, but CANCELS instead of flushing: used by
-   deleteCurrent(), where writing the folder back out is exactly the opposite of
+   deleteSessionById(), where writing the folder back out is exactly the opposite of
    what the user just asked for ("I deleted it and it comes back"). */
 function cancelPending() {
   clearTimeout(t);
   scheduled = false;
 }
 
+/** Open a saved project. The running turn is left, not stopped: it is the old project's
+    turn, the server keeps running it, and it is picked up when that project is opened again. */
 export async function openSessionById(id) {
+  stopTurn(false);                      // first: a turn that ends arms a save, flushed below
   await flushPending();                 // save whatever was pending for the OLD session first
   const r = await post('/api/sessions/open', { id });
   if (r.error) throw new Error(r.error);
@@ -102,27 +124,30 @@ export async function openSessionById(id) {
     The old project's pending save lands in ITS folder first; nothing is created
     for the new one until it is touched. */
 export async function newProject() {
+  stopTurn(false);                      // leave it running: it is that project's turn, not this page's
   await flushPending();
   S.sessionDirId = null;
   touched = false;
+  reset();                              // clean Untitled project; the editor keeps its model, as a reload does
 }
 
-/** Delete any saved project. Deleting the open one also forgets it, so the page is
-    back to an untouched Untitled project that will not recreate the folder. */
+/** Delete any saved project. Deleting the open one stops its turn and also forgets it, so
+    the page is back to an untouched Untitled project that will not recreate the folder. */
 export async function deleteSessionById(id) {
   if (!id) return { ok: true };
   const isCurrent = id === S.sessionDirId;
   if (isCurrent) {
-    deleting++;                         // block saveSoon()/setTurnBusy() from arming a save until this settles
+    deleting++;                         // block saveSoon() from arming a save until this settles
+    stopTurn(true);                     // after deleting++: a turn that ends tries to arm one
     cancelPending();                    // a save already armed for THIS id must not race the delete below
   }
   try {
+    if (isCurrent) await saveIdle();    // nor one already in flight: landing after the delete it recreates the folder
     const r = await post('/api/sessions/delete', { id });
-    if (!r.error && isCurrent) { S.sessionDirId = null; touched = false; }
+    // still the open one: an overlapping delete may have settled first and another project been opened since
+    if (!r.error && id === S.sessionDirId) { S.sessionDirId = null; touched = false; reset(); }
     return r;
   } finally {
     if (isCurrent) deleting--;
   }
 }
-
-export const deleteCurrent = () => deleteSessionById(S.sessionDirId);

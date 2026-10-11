@@ -1,24 +1,25 @@
 import { createServer } from 'node:http';
-import { readFile, writeFile, mkdir, stat, readdir, access } from 'node:fs/promises';
-import { constants as FS } from 'node:fs';
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, extname, normalize, dirname, sep, isAbsolute } from 'node:path';
+import { join, extname, normalize, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
-import { Tellurium, VENV_PY } from './tellurium.mjs';
-import { runAgent } from './agent.mjs';
-import { runLocalAgent, Chat } from './local-agent.mjs';
-import { runTurn, modelVersion } from './turn.mjs';
-import { startLive, watchLive, liveMeta, stopLive } from './live.mjs';
+import { Tellurium } from './tellurium.mjs';
+import { Chat } from './local-agent.mjs';
+import { v1Base } from '../web/js/oai.mjs';
+import { startTurn, resolveScratch } from './chat.mjs';
+import { watchLive, liveMeta, stopLive } from './live.mjs';
 import { jev, laya, questions } from './router.mjs';
 import { homedir } from 'node:os';
 import { listSessions, saveSession, openSession, deleteSession,
-         sessionDir, readHistory, compactPrompt, thinkingPrompt, parseHistory } from './sessions.mjs';
-import { rootFor, listFiles, readText, openRaw, writeText, deleteFile, searchFiles, saveAttachments, attachmentNote } from './files.mjs';
+         sessionDir, readHistory, parseHistory } from './sessions.mjs';
+import { rootFor, listFiles, readText, openRaw, writeText, deleteFile, searchFiles } from './files.mjs';
 
 const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const WEB = join(ROOT, 'web');
-const WORK = join(ROOT, 'workspace');
+// Given, not assumed: the route tests point it at a temp folder, so they never touch
+// the user's projects. Unset, it is where it always was.
+const WORK = process.env.MCA_WORKSPACE || join(ROOT, 'workspace');
 const MODEL_FILE = join(WORK, 'model.txt');
 const RUNS = join(WORK, 'runs');
 const SETTINGS_FILE = join(WORK, 'settings.json');
@@ -54,7 +55,7 @@ async function body(req, limit = 4e6) {
 /* One history.md summary (the fold: ~1000 words -> ~200; or one turn's thinking), by
    the model the user is already using.
    Claude Code has no plain completion endpoint, so it gets a one-shot `claude -p`. */
-async function compactWith({ runtime, chatCfg, model }, [sys, user]) {
+const summarise = {
   // No maxTokens: the reply budget covers thinking too, and at 800 a thinking model
   // spent it all thinking — measured: bonsai-27b failed every fold (and the cutoff
   // retry) this way and history.md grew to 3,688 words. Uncapped it thought ~1,500
@@ -63,13 +64,13 @@ async function compactWith({ runtime, chatCfg, model }, [sys, user]) {
   // a fold take ~5 min on bonsai-27b (LM Studio honours reasoning_effort 'none':
   // measured 0.6 s vs 29 s on a one-line summary). A server that rejects the field
   // gets the plain request.
-  if (runtime === 'openai') {
+  async local(chatCfg, [sys, user]) {
     const chat = new Chat(chatCfg);
     const msg = await chat.complete({ messages: [sys, user], extra: { reasoning_effort: 'none' } })
       .catch(() => chat.complete({ messages: [sys, user] }));
     return msg.content;
-  }
-  return new Promise((ok, fail) => {
+  },
+  claude: (model, [sys, user]) => new Promise((ok, fail) => {
     // the batch goes in on stdin, not argv: Windows caps a command line at 32,767 characters
     const p = spawn('claude', ['-p', '--append-system-prompt', sys.content,
                                '--setting-sources', 'project', ...(model ? ['--model', model] : [])],
@@ -81,8 +82,17 @@ async function compactWith({ runtime, chatCfg, model }, [sys, user]) {
     const t = setTimeout(() => p.kill(), 120_000);
     p.on('error', fail);
     p.on('close', code => { clearTimeout(t); code === 0 ? ok(out) : fail(new Error('claude -p exited ' + code)); });
-  });
-}
+  }),
+};
+
+/* A local model turn runs for many minutes with nobody touching the Mac, and idle
+   sleep cut one mid-step — measured (pmset -g log): display off 19:03:41, idle
+   sleep 19:05:55; Chrome dropped the stream as "network error" and the run was
+   killed. Hold off idle sleep for the turn only (-w: never outlives the server;
+   the display may still sleep). */
+const awake = () => process.platform === 'darwin'
+  ? spawn('caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' }).on('error', () => {})
+  : null;
 
 async function ensureWorkspace() {
   await mkdir(join(WORK, 'runs'), { recursive: true });
@@ -91,19 +101,6 @@ async function ensureWorkspace() {
     await writeFile(SETTINGS_FILE, JSON.stringify({ start: 0, end: 100, points: 50 }, null, 2));
 }
 
-/* Where the AI does its work. Default is the install's own scratch folder; the user
-   can point it anywhere they can write. Only the AI's scratch moves — the live model
-   and the simulation settings stay in workspace/ either way. */
-async function resolveScratch(dir) {
-  if (!dir) return RUNS;
-  const p = normalize(String(dir));
-  if (!isAbsolute(p)) throw new Error('the working folder must be an absolute path');
-  const st = await stat(p).catch(() => null);
-  if (!st) throw new Error('no such folder: ' + p);
-  if (!st.isDirectory()) throw new Error('not a folder: ' + p);
-  await access(p, FS.W_OK).catch(() => { throw new Error('cannot write to: ' + p); });
-  return p;
-}
 // The one answer to "which folder does this request mean" (files.mjs rootFor), bound once.
 const folder = q => rootFor(q, { work: WORK, runs: RUNS, resolveScratch });
 
@@ -139,9 +136,8 @@ const lmsBin = async () => (await which('lms')) ?? (existsSync(LMS) ? LMS : null
    the model server plus Chrome's local-network prompt, and this server needs
    none of it. */
 async function probeOai(baseUrl, apiKey, ms = 6000) {
-  let url = String(baseUrl || '').replace(/\/+$/, '');
+  const url = v1Base(baseUrl);
   if (!url) return { ok: false, error: 'no URL' };
-  if (!/\/v\d+$/.test(url)) url += '/v1';
   try {
     const r = await fetch(url + '/models', { signal: AbortSignal.timeout(ms),
       headers: apiKey ? { authorization: 'Bearer ' + apiKey } : {} });
@@ -215,6 +211,40 @@ async function serveStatic(req, res, urlPath) {
 }
 
 /* -------------------------------- api --------------------------------- */
+/* What a hosted deployment answers instead of running the route: it has no local
+   folder, no keys and no model server, so everything but Tellurium is refused (or
+   answered empty, where the page asks on load). */
+const NOT_HOSTED = { error: 'not available on a hosted deployment' };
+const NO_SESSIONS = { error: 'sessions are local-only' }, NO_FILES = { error: 'files are local-only' };
+const HOSTED_REPLY = {
+  // Hosted: no-op. There's one Tellurium worker shared by every visitor, so
+  // persisting a model here would leak one visitor's draft into another's page;
+  // the editor already holds the model client-side.
+  'PUT /api/model':            [200, { ok: true }],
+  'PUT /api/settings':         [200, { ok: true }],
+  'GET /api/history':          [200, { summary: '', lines: [] }],
+  'GET /api/fs':               [400, NOT_HOSTED],
+  'POST /api/scratch':         [400, { ok: false,
+    error: 'This deployment runs Tellurium only; there is no local folder to write to.' }],
+  'GET /api/sessions':         [400, NO_SESSIONS],
+  'POST /api/sessions/save':   [400, NO_SESSIONS],
+  'POST /api/sessions/open':   [400, NO_SESSIONS],
+  'POST /api/sessions/delete': [400, NO_SESSIONS],
+  'GET /api/files':            [400, NO_FILES],
+  'GET /api/file':             [400, NO_FILES],
+  'PUT /api/file':             [400, NO_FILES],
+  'DELETE /api/file':          [400, NO_FILES],
+  'GET /api/search':           [400, NO_FILES],
+  'POST /api/probe':           [400, NOT_HOSTED],
+  'GET /api/local/scan':       [200, { hosted: true, servers: [], ollama: null }],
+  'POST /api/local/eject':     [200, { ejected: [] }],
+  'POST /api/local/start':     [400, { ok: false, ...NOT_HOSTED }],
+  'POST /api/router/test':     [400, { ok: false, ...NOT_HOSTED }],
+  'POST /api/chat':            [400, { error:
+    'This deployment runs Tellurium only. Pick a local model in Settings — it runs on ' +
+    'your machine and talks to this site directly.' }],
+};
+
 const routes = {
   'GET /api/health': async (req, res) => json(res, 200, { ok: te.installed }),
 
@@ -236,35 +266,26 @@ const routes = {
   },
 
   'GET /api/model': async (req, res) => {
-    await ensureWorkspace();
     const file = await modelFile(new URL(req.url, 'http://x').searchParams.get('project'));
-    json(res, 200, { src: await readFile(file, 'utf8').catch(() => ''), version: await modelVersion(file) });
+    json(res, 200, { src: await readFile(file, 'utf8').catch(() => '') });
   },
 
   'PUT /api/model': async (req, res) => {
-    // Hosted: no-op. There's one Tellurium worker shared by every visitor, so
-    // persisting a model here would leak one visitor's draft into another's page;
-    // the editor already holds the model client-side.
-    if (HOSTED) return json(res, 200, { version: 0 });
     const { src, project } = await body(req);
     if (typeof src !== 'string') return json(res, 400, { error: 'src must be a string' });
-    await ensureWorkspace();
     const file = await modelFile(project);
     noteEditorWrite(file, src);
     await writeFile(file, src);
-    json(res, 200, { version: await modelVersion(file) });
+    json(res, 200, { ok: true });
   },
 
   'PUT /api/settings': async (req, res) => {
-    if (HOSTED) return json(res, 200, { ok: true });
     const s = await body(req);
-    await ensureWorkspace();
     await writeFile(SETTINGS_FILE, JSON.stringify(s, null, 2));
     json(res, 200, { ok: true });
   },
 
   'GET /api/settings': async (req, res) => {
-    await ensureWorkspace();
     let s;
     try { s = JSON.parse(await readFile(SETTINGS_FILE, 'utf8')); }
     catch { s = { start: 0, end: 100, points: 50 }; }
@@ -290,7 +311,6 @@ const routes = {
 
   /* The project's memory (history.md), for the History pane. */
   'GET /api/history': async (req, res) => {
-    if (HOSTED) return json(res, 200, { summary: '', lines: [] });
     const project = new URL(req.url, 'http://x').searchParams.get('project');
     if (!project) return json(res, 200, { summary: '', lines: [] });
     let dir;
@@ -301,7 +321,6 @@ const routes = {
   /* Directory listing for the local-model file picker. The browser cannot give a
      real path from <input type=file>, so the server browses instead. */
   'GET /api/fs': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'not available on a hosted deployment' });
     const u = new URL(req.url, 'http://x');
     const want = u.searchParams.get('path');
     const dir = want ? normalize(want) : homedir();
@@ -323,33 +342,25 @@ const routes = {
 
   'POST /api/scratch': async (req, res) => {
     const { dir } = await body(req);
-    if (HOSTED) return json(res, 400, { ok: false,
-      error: 'This deployment runs Tellurium only; there is no local folder to write to.' });
-    try { json(res, 200, { ok: true, dir: await resolveScratch(dir), default: RUNS }); }
+    try { json(res, 200, { ok: true, dir: await resolveScratch(dir, RUNS), default: RUNS }); }
     catch (e) { json(res, 200, { ok: false, error: String(e.message || e) }); }
   },
 
   /* Sessions. One folder per project directly under workspace/; the directory
      listing is the session list. Hosted deployments have no local folder to keep them in. */
   'GET /api/sessions': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'sessions are local-only' });
-    await ensureWorkspace();
     json(res, 200, { sessions: await listSessions(WORK) });
   },
 
   'POST /api/sessions/save': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'sessions are local-only' });
     const { id, name, fresh, chats, settings, model } = await body(req);
     if (!id) return json(res, 400, { error: 'id is required' });
-    await ensureWorkspace();
     try { json(res, 200, await saveSession(WORK, { id, name, fresh, chats, settings, model })); }
     catch (e) { json(res, 400, { error: String(e.message || e) }); }
   },
 
   'POST /api/sessions/open': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'sessions are local-only' });
     const { id } = await body(req);
-    await ensureWorkspace();
     let s;
     try { s = await openSession(WORK, id); }
     catch (e) { return json(res, 400, { error: String(e.message || e) }); }
@@ -357,11 +368,10 @@ const routes = {
     // nothing is copied over the default workspace/model.txt any more
     if (s.settings && Object.keys(s.settings).length)
       await writeFile(SETTINGS_FILE, JSON.stringify(s.settings, null, 2));
-    json(res, 200, { ...s, version: await modelVersion(await modelFile(s.id)) });
+    json(res, 200, s);
   },
 
   'POST /api/sessions/delete': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'sessions are local-only' });
     const { id } = await body(req);
     try { await deleteSession(WORK, id); json(res, 200, { ok: true }); }
     catch (e) { json(res, 400, { error: String(e.message || e) }); }
@@ -370,15 +380,12 @@ const routes = {
   /* Files and Search views (backend/files.mjs). The folder is the one the agent
      writes to: the working folder from Settings, else the project's, else runs/. */
   'GET /api/files': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
     const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
-    await ensureWorkspace();
     const root = await folder(q);
     json(res, 200, { root, files: await listFiles(root) });
   },
 
   'GET /api/file': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
     const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
     const root = await folder(q);
     if (q.raw !== '1') return json(res, 200, await readText(root, q.path));
@@ -390,21 +397,18 @@ const routes = {
   },
 
   'PUT /api/file': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
     const q = await body(req);
     const root = await folder(q);
     json(res, 200, await writeText(root, q.path, q.content));
   },
 
   'DELETE /api/file': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
     const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
     const root = await folder(q);
     json(res, 200, await deleteFile(root, q.path));
   },
 
   'GET /api/search': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'files are local-only' });
     const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
     const root = await folder(q);
     json(res, 200, { results: await searchFiles(root, q.q) });
@@ -412,7 +416,6 @@ const routes = {
 
   /* Probe an OpenAI-compatible endpoint and list the models it serves. */
   'POST /api/probe': async (req, res) => {
-    if (HOSTED) return json(res, 400, { error: 'not available on a hosted deployment' });
     const { baseUrl, apiKey } = await body(req);
     if (!baseUrl) return json(res, 400, { ok: false, error: 'baseUrl is required' });
     const r = await probeOai(baseUrl, apiKey);
@@ -424,7 +427,6 @@ const routes = {
      model from here and the turn is proxied through this server, so the model
      server never sees a browser origin and never needs a CORS flag. */
   'GET /api/local/scan': async (req, res) => {
-    if (HOSTED) return json(res, 200, { hosted: true, servers: [], ollama: null });
     const servers = (await Promise.all(KNOWN.map(async k => {
       const r = await probeOai(k.base, '', 1500);
       return r.ok ? { ...k, models: r.models } : null;
@@ -433,7 +435,6 @@ const routes = {
   },
 
   'POST /api/local/eject': async (req, res) => {
-    if (HOSTED) return json(res, 200, { ejected: [] });
     const { baseUrl, model } = await body(req);
     json(res, 200, { ejected: await ejectOthers(baseUrl, model) });
   },
@@ -442,7 +443,6 @@ const routes = {
      open a terminal. LM Studio's app running is not enough: its models only reach
      the picker once its server listens on 1234, and nothing here could start it. */
   'POST /api/local/start': async (req, res) => {
-    if (HOSTED) return json(res, 400, { ok: false, error: 'not available on a hosted deployment' });
     const [ol, lms] = await Promise.all([which('ollama'), lmsBin()]);
     if (!ol && !lms) return json(res, 200, { ok: false,
       error: 'Neither Ollama nor LM Studio is installed. Install one (https://ollama.com/download or https://lmstudio.ai), then press Start again.' });
@@ -467,7 +467,6 @@ const routes = {
   /* The Settings "Test" button: one fixed routing call to the chosen provider, which
      should say tellurium. For Layla it also warms the worker (the model load). */
   'POST /api/router/test': async (req, res) => {
-    if (HOSTED) return json(res, 400, { ok: false, error: 'not available on a hosted deployment' });
     const { key, provider } = await body(req);
     if (provider !== 'laya' && !key) return json(res, 400, { ok: false, error: 'the key is empty' });
     const t0 = Date.now();
@@ -484,64 +483,10 @@ const routes = {
 
   /* Server-sent events: one agent turn, streamed. */
   'POST /api/chat': async (req, res) => {
-    const { message, sessionId, sessionDirId, model, env, runtime, chatCfg,
-            scratchDir, useWorkflow = true, resume = false, router: routerCfg,
-            attachments, chat } = await body(req, 60e6);       // photos: far past the 4 MB a JSON call needs
-    if (!message?.trim()) return json(res, 400, { error: 'message is empty' });
-    if (HOSTED) return json(res, 400, { error:
-      'This deployment runs Tellurium only. Pick a local model in Settings — it runs on ' +
-      'your machine and talks to this site directly.' });
-    // A misconfigured endpoint used to surface in the browser as a bare "network
-    // error"; say what is actually wrong, over SSE, so the chat can show it.
-    if (runtime === 'openai' && !chatCfg?.baseUrl)
-      return json(res, 400, { error:
-        'No server URL for this model. Open Settings → Local models, set the URL ' +
-        '(Ollama: http://localhost:11434, LM Studio: http://localhost:1234), press ' +
-        '"Test & list models", then Save.' });
-    await ensureWorkspace();
-    // a model picked mid-session: free the GPU of the one it replaces before loading this one
-    if (runtime === 'openai') await ejectOthers(chatCfg.baseUrl, chatCfg.model).catch(() => {});
-    // The project's own folder is where its memory (history.md) and its scratch live.
-    let sdir = null, scratch;
-    try { if (sessionDirId) sdir = await folder({ project: sessionDirId }); }
-    // worded as before: 'no such project: x' bare, a bad id prefixed
-    catch (e) { return json(res, 400, { error: e.message.replace(/^(?!no such project)/, 'Project: ') }); }
-    // A working folder the user picked in Settings wins over the project's own
-    // folder; the project folder is only the fallback scratch (rootFor's precedence).
-    try { scratch = await folder({ dir: scratchDir, project: sessionDirId }); }
-    catch (e) { return json(res, 400, { error: 'Working folder: ' + e.message +
-      ' — pick another in Settings, or clear it to use the default.' }); }
-    // in a project the agent edits that project's model, not the default one
-    const mfile = sdir ? join(sdir, 'model.txt') : MODEL_FILE;
-    // Attachments go where the agent already works, and the message says where: both
-    // runtimes can then open them with the file tools they have.
-    let att = [];
-    try { att = await saveAttachments(scratch, attachments, join(ROOT, VENV_PY)); }
-    catch (e) { return json(res, 400, { error: 'Could not save the attachment: ' + e.message }); }
-    // history.md and the router get the question and the file names; only the agent gets the contents
-    const said = !att.length ? message : message + '\n\n[attached: ' + att.map(f => f.path).join(', ') + ']';
-    const ask = message + attachmentNote(att, runtime === 'openai');
-
-    /* A local model turn runs for many minutes with nobody touching the Mac, and idle
-       sleep cut one mid-step — measured (pmset -g log): display off 19:03:41, idle
-       sleep 19:05:55; Chrome dropped the stream as "network error" and the run was
-       killed. Hold off idle sleep for the turn only (-w: never outlives the server;
-       the display may still sleep). */
-    const awake = process.platform === 'darwin' && !HOSTED
-      ? spawn('caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' }).on('error', () => {})
-      : null;
-
-    // The turn belongs to the project, not to this response (live.mjs): closing the page
-    // no longer stops it. The turn itself — watcher, event queue, history, end-of-turn
-    // ordering — is turn.mjs.
-    const key = sessionDirId || '';
-    startLive(key, { q: message, chat, files: att.map(f => f.name), at: Date.now() }, (emit, end) => runTurn({
-      root: ROOT, sdir, mfile, scratch, message: said, ask, routerCfg, runtime, editorEcho, emit,
-      agent: runtime === 'openai' ? runLocalAgent : runAgent,
-      args: { sessionId, model, env: env || {}, chatCfg, useWorkflow, resume, te, images: att.filter(f => f.kind === 'image').map(f => f.url) },
-      compact: (sum, batch) => compactWith({ runtime, chatCfg, model }, compactPrompt(sum, batch)),
-      shorten: thinking => compactWith({ runtime, chatCfg, model }, thinkingPrompt(thinking)),
-      end: () => { awake?.kill(); end(); } }));
+    const q = await body(req, 60e6);       // photos: far past the 4 MB a JSON call needs
+    let key;
+    try { key = await startTurn(q, { root: ROOT, work: WORK, te, editorEcho, eject: ejectOthers, summarise, awake }); }
+    catch (e) { if (e.status) return json(res, e.status, { error: e.message }); throw e; }
     follow(res, key);
   },
 
@@ -550,7 +495,7 @@ const routes = {
      asked, since the page that knew is gone. */
   'GET /api/chat/live': async (req, res) => {
     const key = new URL(req.url, 'http://x').searchParams.get('project') || '';
-    const meta = HOSTED ? null : liveMeta(key);
+    const meta = liveMeta(key);   // never one on a hosted deployment: /api/chat is refused there
     if (!meta) { res.writeHead(204); return res.end(); }
     follow(res, key, { type: 'live', ...meta });
   },
@@ -581,7 +526,8 @@ const server = createServer(async (req, res) => {
   const key = `${req.method} ${url.split('?')[0]}`;
   const handler = routes[key];
   try {
-    if (handler) await handler(req, res);
+    if (HOSTED && HOSTED_REPLY[key]) json(res, ...HOSTED_REPLY[key]);
+    else if (handler) { await ensureWorkspace(); await handler(req, res); }
     else if (req.method === 'GET') await serveStatic(req, res, url);
     else json(res, 404, { error: 'no route for ' + key });
   } catch (e) {

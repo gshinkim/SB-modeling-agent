@@ -11,6 +11,8 @@ const base = { root: '/tmp/app', prompt: 'hi', sid: 'abc-123', model: '',
   const fresh = buildArgs({ ...base, resuming: false });
   assert.ok(fresh.includes('--session-id'), 'a new session claims its id');
   assert.ok(!fresh.includes('--resume'));
+  // without it the CLI sends thinking blocks with empty text and the panel never opens
+  assert.equal(fresh[fresh.indexOf('--thinking-display') + 1], 'summarized');
 }
 
 {

@@ -1,5 +1,5 @@
 /* node --test backend/live-routes.test.mjs
-   Over real HTTP, against a stub model: a turn survives the browser closing its
+   Over real HTTP, against a stub model and a temp workspace: a turn survives the browser closing its
    connection, a page that comes back is sent the whole turn, and Stop is a request. */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -23,7 +23,7 @@ const stub = createServer((req, res) => {
 });
 await new Promise(r => stub.listen(0, '127.0.0.1', r));
 const srv = spawn('node', [join(ROOT, 'backend/server.mjs')],
-                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1' }, stdio: 'ignore' });
+                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1', MCA_WORKSPACE: join(tmp, 'ws') }, stdio: 'ignore' });
 const until = async (ok, what) => { for (let i = 0; i < 200; i++) { if (await ok()) return; await new Promise(r => setTimeout(r, 50)); } throw new Error('timed out: ' + what); };
 const events = async res => (await res.text()).split('\n').filter(l => l.startsWith('data: ')).map(l => JSON.parse(l.slice(6)));
 const ask = (message, signal) => fetch(url('/api/chat'), { method: 'POST', signal, headers: { 'content-type': 'application/json' },

@@ -1,18 +1,20 @@
 /* node backend/model-live.test.mjs
-   Boots the real server and a stub model that edits the project's model mid-turn,
+   Boots the real server (on a temp workspace) and a stub model that edits the project's model mid-turn,
    then keeps the turn running. The editor must hear about the edit while the turn
    is still going — it used to only at the very end, so a long local turn, or one
    that was stopped, never showed the AI's edit at all. The editor's own writes
    must not be echoed back. */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const WORK = join(ROOT, 'workspace');
+// realpath: the agent's file tools compare real paths, and macOS's tmpdir is a symlink
+const WORK = await realpath(await mkdtemp(join(tmpdir(), 'mca-ws-')));
 const PORT = 5196;
 const SID = 'test-model-live';
 const url = p => `http://127.0.0.1:${PORT}${p}`;
@@ -31,7 +33,7 @@ const stub = createServer((req, res) => {
     const call = (name, args) => ({ tool_calls: [{ index: 0, id: 'c' + step, type: 'function',
       function: { name, arguments: JSON.stringify(args) } }] });
     const delta = skill ? call('load_skill', { name: skill })
-      : step === 4 ? call('write_file', { path: `workspace/${SID}/model.txt`, content: NEW_MODEL })
+      : step === 4 ? call('write_file', { path: join(WORK, SID, 'model.txt'), content: NEW_MODEL })
       : { content: 'Changed k to 7.' };
     // the answer after the write takes a while, as a real model's does
     setTimeout(() => {
@@ -43,7 +45,7 @@ const stub = createServer((req, res) => {
 await new Promise(r => stub.listen(0, '127.0.0.1', r));
 
 const srv = spawn('node', [join(ROOT, 'backend/server.mjs')],
-                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1' }, stdio: 'ignore' });
+                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1', MCA_WORKSPACE: WORK }, stdio: 'ignore' });
 try {
   for (let i = 0; i < 60; i++) {
     if (await fetch(url('/api/health')).then(() => true).catch(() => false)) break;
@@ -86,5 +88,5 @@ try {
   console.log('model edits reach the editor mid-turn ok');
 } finally {
   srv.kill(); stub.close();
-  await rm(join(WORK, SID), { recursive: true, force: true });
+  await rm(WORK, { recursive: true, force: true });
 }

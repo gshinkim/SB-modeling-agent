@@ -1,8 +1,8 @@
 import { $, esc, store } from './util.mjs';
 import { S } from './state.mjs';
 import { onShow, where, go } from './shell.mjs';
-import { listSessions, currentId } from './session.mjs';
-import { openProject, deleteProjects, startNewProject } from './chat.mjs';
+import { listSessions, currentId, newProject } from './session.mjs';
+import { openProject, deleteProjects } from './chat.mjs';
 import { scratchDir, useWorkflow } from './settings.mjs';
 
 /* The small panes around the document: the projects popover on the rail, and the
@@ -105,7 +105,7 @@ function initProjects(){
 
 /** A new project is empty: no chats, no model. It lands on the editor, where the model gets written. */
 async function createProject(nm){
-  await startNewProject();
+  await newProject();
   blank();
   if(nm) rename(nm);              // a named project is a touched one: it gets its folder now
   go('workspace', 'model');

@@ -5,22 +5,20 @@ import { resolveModel, useWorkflow, scratchDir, router, openSettings } from './s
 import { runBrowserAgent } from './agent.mjs';
 import { renderMarkdown } from './md.mjs';
 import { downloadChat } from './export.mjs';
-import { currentId, touch, saveNow, saveSoon, openSessionById, deleteSessionById, newProject } from './session.mjs';
+import { currentId, savedId, saveSoon, openSessionById, deleteSessionById } from './session.mjs';
 import { pickSession } from './sessionpicker.mjs';
 import { showSide, go } from './shell.mjs';
 import { newTurn } from './turn.mjs';
 
 
-let abort = null, onModelChanged = () => {}, onSessionDeleted = () => {};
+let abort = null, onModelChanged = () => {};
 export const setOnModelChanged = fn => { onModelChanged = fn; };
-export const setOnSessionDeleted = fn => { onSessionDeleted = fn; };
 
 const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-/* Conversations live only in this module: no localStorage, no file, nothing sent
-   anywhere to be kept. Reload the page or close the tab and every log is gone,
-   which is the whole point — the agent remembers within a session and forgets
-   when it ends. */
+/* Conversations live in this module: no localStorage. On a local install session.mjs
+   saves them with the project (dumpChats) and opening the project brings them back
+   (loadChats); hosted keeps nothing, so there a reload or a closed tab loses every log. */
 const chats = [];
 let active = null, seq = 0;
 const cur = () => chats.find(c => c.id === active);
@@ -47,9 +45,9 @@ export function replaySlice(log, cap = REPLAY_CAP){
   return { turns: turns.slice(-cap), skipped: turns.length - cap };
 }
 
-/* Project switching stops the running turn first, so it lives here with `abort`.
-   The projects popover and the old modal picker both go through these. */
-const stopTurn = (real = true) => { if(abort){ abort(real); abort=null; $('#send').textContent='Send'; } };
+/* Project switching stops the running turn first: session.mjs does that through this
+   (main.mjs hands it over), so no caller has to remember to. */
+export const stopTurn = (real = true) => { if(abort){ abort(real); abort=null; $('#send').textContent='Send'; } };
 
 export function loadChats(saved){
   chats.forEach(c => c.thread.remove());
@@ -78,9 +76,8 @@ export function loadChats(saved){
 }
 
 /* Called by main.mjs's setAll after loadChats(), when the session just opened had
-   no saved model snapshot. Both server.mjs and main.mjs deliberately leave the
-   editor untouched in that case (clearing it would diverge from the live
-   workspace/model.txt, which is worse) — but that means the editor is silently
+   no saved model snapshot. main.mjs deliberately leaves the editor untouched in
+   that case — but that means the editor is silently
    still showing whatever project was open before. Flag it, the same way an
    unverified answer or a tool-less turn already gets flagged above. */
 export function noteNoModel(){
@@ -112,8 +109,8 @@ function deleteChat(){
   chats.splice(chats.indexOf(c), 1);
   if(chats.length) show(chats.at(-1).id); else makeChat();
   // a saved project must forget it; an unsaved one has nothing on disk to update,
-  // and saveSoon() would create a folder for it
-  if(currentId() != null) saveSoon();
+  // and a touching saveSoon() would create a folder for it
+  saveSoon(false);
 }
 
 function show(id){
@@ -231,7 +228,6 @@ function turnUi(c, v, started = Date.now()){
   const handle = ev => {
       if(!t.feed(ev)) return;
       paintStatus();
-      if(ev.type==='session'){ S.sessionId = ev.sessionId; return; }
       if(ev.type==='phase'){ paintChips(); paintThoughts(); return; }
       if(ev.type==='tools'){ paintChips(); text.textContent=''; $('#msgs').scrollTop=1e9; return; }
       if(ev.type==='unthink'){ text.textContent=''; think.hidden=false; paintThoughts(); return; }
@@ -314,10 +310,8 @@ function send(){
   } else {
     // Save first: the turn's memory (history.md) and files go in the project's folder,
     // which must exist — and have its final name — before the agent starts.
-    touch();
-    Promise.all([Promise.all(files.map(base64)), saveNow().catch(() => {})]).then(([attachments]) => {
+    Promise.all([Promise.all(files.map(base64)), savedId()]).then(([attachments, project]) => {
       if(ui.t.stopped) return;
-      const project = currentId();
       const off = api.chat({ message: v, chat: c.id, sessionId: c.sessionId, sessionDirId: project,
                          resume: !!c.sessionId, ...rt, scratchDir: scratchDir(),
                          useWorkflow: useWorkflow(), router: router(), attachments }, ui.handle);
@@ -381,13 +375,7 @@ export function offerScratchSetup(){
   row.append(pick, skip); d.append(row);
 }
 
-export async function startNewProject(){
-  stopTurn(false);                       // leave it running: it is that project's turn, not this page's
-  await newProject();
-  onSessionDeleted(); loadChats([]);     // clean Untitled project; the editor keeps its model, as a reload does
-}
 export async function openProject(id){
-  stopTurn(false);
   try { await openSessionById(id); return true; }
   catch(e){ alert('Could not open that project: ' + e.message); return false; }
 }
@@ -395,10 +383,9 @@ export async function deleteProjects(ids){
   const failed = [];
   for(const id of ids){
     const isCurrent = id === currentId();
-    if(isCurrent) stopTurn();
     const r = await deleteSessionById(id);
     if(r.error){ failed.push(id + ': ' + r.error); continue; }
-    if(isCurrent){ onSessionDeleted(); loadChats([]); go('home'); }  // nothing is open now: back to home, not an Untitled workspace
+    if(isCurrent) go('home');                // nothing is open now: back to home, not an Untitled workspace
   }
   if(failed.length) alert('Could not delete:\n' + failed.join('\n'));
 }

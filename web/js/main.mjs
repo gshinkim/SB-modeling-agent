@@ -4,14 +4,14 @@ import * as api from './api.mjs';
 import { draw, initChartInteractions, showTable } from './chart.mjs';
 import { renderControls, initAccordions, setOnChange } from './panel.mjs';
 import { initSettings, fillModels, closeSettings, refreshEnv, refreshLocal } from './settings.mjs';
-import { initChat, setOnModelChanged, setOnSessionDeleted, offerScratchSetup, dumpChats, loadChats, noteNoModel, resumeLive } from './chat.mjs';
+import { initChat, setOnModelChanged, stopTurn, offerScratchSetup, dumpChats, loadChats, noteNoModel, resumeLive } from './chat.mjs';
 import { initExport, initImport, save, stampNow } from './export.mjs';
 import { initShell, go, where } from './shell.mjs';
 import { initPanes, syncIdentity, renderMeta } from './panes.mjs';
 import { initAnalysis, onRun, coefficientsCSV, reportMarkdown, describeRun } from './analysis.mjs';
 import { initFiles } from './files.mjs';
 import { initSearch } from './search.mjs';
-import { initSession, saveSoon, currentId, saveIdle } from './session.mjs';
+import { initSession, saveSoon, savedId } from './session.mjs';
 
 const editor = $('#model');
 
@@ -93,15 +93,15 @@ async function commit(){
   editing = false;
   // A rename or first save still in flight must land before the model PUT below,
   // or the PUT can hit the old folder id (rename) or the shared default file
-  // (first save not yet claimed its id).
-  await saveIdle();
+  // (first save not yet claimed its id). savedId() waits for it, and an edit to a
+  // project with no folder yet creates the folder first.
+  const id = await savedId(false);
   // simulate at once; the save to disk runs alongside instead of in front of it
-  const [put] = await Promise.all([api.putModel(editor.value, currentId()), run(), api.putSettings(cfg())]);
+  const [put] = await Promise.all([api.putModel(editor.value, id), run(), api.putSettings(cfg())]);
   if(put?.error) status('err', 'Model not saved: ' + put.error);
   // Direct edits (editor input, tStart/tEnd/nPts) all funnel through here, same as
   // a chat turn or a rename — without this, editing a session's model without ever
-  // sending a chat message never reaches its runs/ snapshot (worthSaving still
-  // guards against creating a folder for a session with no completed turns).
+  // sending a chat message never reaches its saved snapshot.
   saveSoon();
 }
 
@@ -251,9 +251,6 @@ setOnModelChanged(src=>{
   if(editing) return status('err', 'AI edited the model while you were typing — kept your text');
   editor.value = src; setOpened(); run();
 });
-// a deleted session's name must not survive to regenerate the folder it named
-setOnSessionDeleted(()=> setProjName(PROJ_DEF));
-
 (async function boot(){
   const savedTheme = store.get('theme',null); if(savedTheme) applyTheme(savedTheme);
   matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>draw());
@@ -273,8 +270,9 @@ setOnSessionDeleted(()=> setProjName(PROJ_DEF));
     catch { report(); }
   };
   initPanes({ getName: projName, rename: n => { setProjName(n); saveSoon(); },
-              // not commit(): that arms a save, and an unnamed project must not get a folder for being created
-              blank: () => { editor.value = ''; setOpened(); S.view = null; api.putModel('', currentId()); run(); } });
+              // not commit(): that arms a save, and an unnamed project must not get a folder for being created.
+              // No project id: newProject() has just closed the old one, so this is the default model file.
+              blank: () => { editor.value = ''; setOpened(); S.view = null; api.putModel(''); run(); } });
   initAnalysis({ getModel: () => editor.value,
                  setModel: src => { editor.value = src; setOpened(); S.view = null; commit(); },
                  importFile: () => $('#openBtn').click(), report, coef });
@@ -284,12 +282,14 @@ setOnSessionDeleted(()=> setProjName(PROJ_DEF));
     getModel: () => editor.value,
     getSettings: cfg,
     getChats: dumpChats,
+    stopTurn,
+    // a deleted session's name must not survive to regenerate the folder it named
+    reset: () => { setProjName(PROJ_DEF); loadChats([]); },
     setAll: s => {
       setProjName(s.name, true);
-      // Deliberately not cleared when empty: that would diverge from
-      // workspace/model.txt, which the server also leaves alone on an empty
-      // snapshot (backend/server.mjs's own `if (s.model)` skip). Diverging the
-      // editor from the live file on disk is worse than the alternative below.
+      // Deliberately not cleared when empty: the editor keeps the model of the
+      // project open before (noteNoModel below says so), and the next save seeds
+      // this project's empty model.txt with it (backend/sessions.mjs saveSession).
       if(s.model) editor.value = s.model;
       if(s.settings?.points){ $('#tStart').value = s.settings.start ?? 0;
                               $('#tEnd').value = s.settings.end ?? 100;

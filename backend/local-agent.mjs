@@ -5,11 +5,10 @@ import { execFile } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { Readable } from 'node:stream';
-import { forHistory, toolRunner, toolResult, readCompletion, fitMessages, resultCap,
-         CONTEXT_DEFAULT, REPEAT_LIMIT, stripToolSyntax, missingArgs, replyTokens,
-         stepBudget, SAMPLING, cutoffNudge, antimonyHint, callTool, userQuestion, closedNote,
-         constrain, quiet, hasNumber, NO_ANSWER } from '../web/js/oai.mjs';
-import { localSystem } from '../web/js/prompt.mjs';
+import { readCompletion, resultCap, CONTEXT_DEFAULT, replyTokens, stepBudget, antimonyHint,
+         callTool, userQuestion, v1Base, completion, runTurn, runStage, hostWorkflow,
+         withWorkflow } from '../web/js/oai.mjs';
+import { localSystem, workflowRule, summaryBlock } from '../web/js/prompt.mjs';
 import { logLine, hintLine, recentLine, failed } from './router.mjs';
 import { pdfText, asText } from './files.mjs';
 import { VENV_PY, PY_ENV } from './tellurium.mjs';
@@ -22,13 +21,10 @@ import { VENV_PY, PY_ENV } from './tellurium.mjs';
    workflows/mca-tellurium.js and runs that exact source, supplying its own
    agent()/phase()/log(). The user's workflow drives the local model verbatim. */
 
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-
 /* ------------------------------- provider ------------------------------- */
 export class Chat {
   constructor({ baseUrl, apiKey, model, contextTokens, replyPct, resultPct, steps }) {
-    this.url = String(baseUrl || '').replace(/\/+$/, '');
-    if (!/\/v\d+$/.test(this.url)) this.url += '/v1';
+    this.url = v1Base(baseUrl);
     this.apiKey = apiKey; this.model = model;
     // What the runtime loaded the model with, not what the weights allow: LM
     // Studio and Ollama both default well below the maximum.
@@ -113,46 +109,9 @@ export class Chat {
   async complete({ messages, tools, schema, signal, onStream, maxTokens, extra }) {
     await this.detectContext(signal);
     const cap = Math.max(256, Math.min(maxTokens ?? Infinity, replyTokens(this.ctx, this.replyPct)));
-    /* Closing tools (the wrap-up) still sends the last ones offered, and says so in
-       words at the end instead of tool_choice 'none'. The chat template renders the
-       tool list first, so dropping it changed the prompt from its first token and
-       the prompt cache missed — measured on LM Studio: the wrap-up re-read 25,910
-       tokens from zero (~3 min at 140 tok/s) and looked hung; and tool_choice
-       'none' makes LM Studio drop the list itself (0 cached tokens vs 3072). A
-       call made anyway is caught (closedCall). A schema step gets no tools at all. */
-    if (tools?.length) this.open = tools;
-    const closed = !tools?.length && this.open && !schema;
-    const body = { model: this.model,
-                   messages: fitMessages(closed ? [...messages, closedNote] : messages, this.ctx, cap),
-                   max_tokens: cap, stream: true, ...SAMPLING, ...extra };
-    if (tools?.length || closed) body.tools = tools?.length ? tools : this.open;
-    else body.tool_choice = 'none';        // a server that honours it cannot emit a call
-    if (schema) body.response_format = {
-      type: 'json_schema', json_schema: { name: 'result', strict: true, schema } };
-
-    const msg = await this.send(body, { signal, onStream, tools });
-    // A closed-tools call is retried even when prose came with it: that prose is the
-    // run-up to the call ("Let me write the final model…:"), not an answer — measured
-    // on bonsai-27b, it was shown as one.
-    // Nothing visible is a dead end whatever ended it: the token limit, or (measured on
-    // ternary-bonsai-2-27b: 17 minutes of thinking, then end of turn) the model itself.
-    if (!msg.closedCall && (msg.tool_calls?.length || msg.content)) return msg;
-
-    /* Cut off mid-thought with nothing visible. The thinking is the work, and it
-       is already done, so put what got through back in front of the model and ask
-       for its next move — re-running the same request just thinks again. "State
-       the final answer" alone was wrong early in a turn: nothing had been run yet,
-       so a model that obeyed the rules had nothing to say and said nothing. */
-    onStream?.({ type: 'log', text: this.model +
-      (msg.closedCall ? ' called a tool after tools were closed; asking it to answer.'
-                   : msg.finish === 'length' ? ' was cut off while thinking; asking it for its next move.'
-                   : ' stopped after thinking without answering; asking it for its next move.') });
-    const retry = { ...body, messages: fitMessages([...messages, ...cutoffNudge(msg, tools?.length)],
-      this.ctx, cap) };
-    const second = await this.send(retry, { signal, onStream, tools });
-    // Never trade a partial answer for nothing: keep the first message unless the
-    // retry actually said something.
-    return second.content || second.tool_calls?.length ? second : msg;
+    if (tools?.length) this.open = tools;   // re-sent closed on the wrap-up (see completion)
+    return completion(body => this.send(body, { signal, onStream, tools }),
+      { model: this.model, messages, tools, closedTools: this.open, schema, ctx: this.ctx, cap, extra, onStream });
   }
 
   async send(body, { signal, onStream, tools }) {
@@ -174,11 +133,7 @@ export class Chat {
     }
     if (!res.body) throw new Error('no response body from ' + this.url);
 
-    const msg = await readCompletion(res, {
-      onStream, toolNames: (tools ?? []).map(t => t.function?.name) });
-    if (!msg.tool_calls?.length && msg.finish === 'length' && msg.content) onStream?.({ type: 'log',
-      text: this.model + ' hit its token limit before finishing - the answer is cut off.' });
-    return msg;
+    return readCompletion(res, { onStream, toolNames: (tools ?? []).map(t => t.function?.name) });
   }
 }
 
@@ -210,16 +165,6 @@ function post(url, headers, body, signal, method = 'POST') {
 }
 
 /* --------------------------------- tools --------------------------------- */
-// Tools that change the project. A repeat of any call is replayed from memory
-// (see toolRunner), so anything that writes has to invalidate that memory.
-const WRITES = ['write_file', 'run_python', 'run_mca_workflow'];
-
-/* Tools that produce a number. Reading the model is not computing with it: a model
-   that reads `k=0.4` and then reports a flux of 1.2 worked it out in its head, which
-   is the one thing the agent is not allowed to do. The answer is still shown — it is
-   labelled, so the user knows nothing behind the number was checked. */
-const COMPUTES = new Set(['run_python', 'run_mca_workflow']);
-
 /* A model that has not read the tellurium Skill invents the API and burns a step
    per guess — measured: five attempts at loadAntimonyModel / Simulator / SBMLReader
    before one worked. The traceback alone never points anywhere; this does. */
@@ -400,86 +345,45 @@ async function steer(rt, tools, messages, recent, step, emit, cap) {
   if (add) Array.isArray(last.content) ? (last.content[0].text += add) : (last.content += add);
 }
 
-/* One tool call, the same in a stage and in the outer turn: refused (missing
-   arguments, a Skill reload, the model gate) or run, then recorded. True if it failed. */
-const dispatcher = (lacks, run, tools, messages, recent, cap) => async (c, name, args) => {
-  const out = lacks(name, args) ?? reload(messages, name, args) ?? modelGate(run, tools.loaded, name === 'write_file' && tools.isModel(args.path)) ?? await run(name, args);
-  messages.push(toolResult(c, name, String(out).slice(0, cap)));
-  recent.push(recentLine(name, args, out));
-  return failed(recent.at(-1));
+/* What the server adds to the shared loop, the same in a stage and in the outer turn:
+   a call is refused (a Skill reload, the model gate) or run, then recorded for the
+   router, which steers before step 0 and after any round that loaded a Skill or failed. */
+const dispatcher = (rt, tools, messages, emit, cap) => {
+  const recent = [];
+  let bad = false, had = 0;
+  return {
+    async before(step) {
+      if (rt.fn && (!step || bad || tools.loaded.size > had)) await steer(rt, tools, messages, recent, step, emit, cap);
+      bad = false; had = tools.loaded.size;
+    },
+    gate: (name, args, run) => reload(messages, name, args) ??
+      modelGate(run, tools.loaded, name === 'write_file' && tools.isModel(args.path)),
+    ran(name, args, out) { recent.push(recentLine(name, args, out)); bad ||= failed(recent.at(-1)); },
+  };
 };
 
-async function toolLoop({ chat, system, prompt, tools, schema, emit, signal,
-                          maxSteps = 12, stageMs = 900000, cap = resultCap(), rt = {} }) {
-  const messages = [{ role: 'system', content: system }, { role: 'user', content: prompt }];
-  const recent = [];
-  if (rt.fn) await steer(rt, tools, messages, recent, 0, emit, cap);
-  const t0 = Date.now();
-  const run = toolRunner(tools.impl, WRITES);
-  const call = dispatcher(missingArgs(tools.defs), run, tools, messages, recent, cap);
-  // A local 27B running seven sequential stages is slow but not dead — say so.
-  const beat = setInterval(() => emit({ type: 'heartbeat', seconds: Math.round((Date.now()-t0)/1000) }), 15000);
-  try {
-  for (let step = 0; step < maxSteps; step++) {
-    if (signal?.aborted) throw new Error('aborted');
-    // Out of steps or out of time: ask once more with NO tools, so the model has to
-    // answer. Breaking out here instead handed the stage back empty, which is what
-    // the user saw as the agent going round in circles and then saying nothing.
-    const stuck = run.repeats >= REPEAT_LIMIT;
-    const wrapUp = step === maxSteps - 1 || Date.now() - t0 > stageMs || stuck;
-    if (wrapUp) emit({ type: 'log', text: stuck
-      ? 'same call repeated ' + run.repeats + 'x; answering with what it has'
-      : 'stage is out of ' + (step === maxSteps - 1 ? 'steps' : 'time') +
-        '; answering with what it has' });
-    // Ask for the schema only once the model has stopped calling tools; many local
-    // models cannot emit a tool call and a constrained JSON object in one turn.
-    const m = await chat.complete({ messages, tools: wrapUp ? undefined : tools.defs, signal,
-      onStream: quiet(emit) });
-    messages.push(forHistory(m));
-    const calls = m.tool_calls ?? [];
-    if (!calls.length) {
-      if (!schema) return m.content ?? '';
-      return await constrain({ complete: a => chat.complete(a), messages, schema, emit, signal });
-    }
-    const had = tools.loaded.size;
-    let bad = false;
-    for (const c of calls) {
-      const name = c.function?.name;
-      let args = {};
-      try { args = JSON.parse(c.function?.arguments || '{}'); } catch {}
-      emit({ type: 'tools', tools: [{ name, input: args }] });
-      bad = await call(c, name, args) || bad;
-    }
-    if (rt.fn && (bad || tools.loaded.size > had)) await steer(rt, tools, messages, recent, step + 1, emit, cap);
-  }
-  if (!schema) return '(the model kept calling tools without answering)';
-  return await constrain({ complete: a => chat.complete(a), messages, schema, emit, signal });
-  } finally { clearInterval(beat); }
-}
+const names = tools => tools.defs.map(d => d.function.name);
 
 /* --------------------------- the workflow, verbatim --------------------------- */
 export async function runWorkflowFile({ root, chat, args, emit, signal, te, scratch,
-                                        modelPath = DEFAULT_MODEL_PATH, loaded, rt }) {
-  const src = await readFile(join(root, 'workflows/mca-tellurium.js'), 'utf8');
-  const body = src.replace(/^\s*export\s+const\s+meta\s*=/m, 'const meta =');
+                                        modelPath = DEFAULT_MODEL_PATH, loaded, rt = {} }) {
   const cap = resultCap(chat.ctx, chat.resultPct);
-  const system = localSystem({ tools: TOOL_NAMES, liveModel: args?.model ?? '', modelPath,
-                               howToRun: howToRun(root, modelPath, scratch) });
   const tools = makeTools(root, emit, te, cap, scratch, modelPath, loaded);
-
-  const agent = async (prompt, opts = {}) => {
-    emit({ type: 'phase', phase: opts.phase, label: opts.label });
-    return toolLoop({ chat, system, prompt, tools, schema: opts.schema, emit, signal, cap, rt,
-                      maxSteps: Math.max(2, stepBudget(chat.steps) - 2) });
-  };
-  const phase = title => emit({ type: 'phase', phase: title });
-  const log = msg => emit({ type: 'log', text: String(msg) });
-
-  const fn = new AsyncFunction('agent', 'phase', 'log', 'args', body);
-  return await fn(agent, phase, log, args);
+  return hostWorkflow({
+    src: await readFile(join(root, 'workflows/mca-tellurium.js'), 'utf8'), args, emit,
+    system: localSystem({ tools: names(tools), liveModel: args?.model ?? '', modelPath,
+                          howToRun: howToRun(root, modelPath, scratch) }),
+    stage: (messages, schema) => {
+      const t0 = Date.now();
+      // A local 27B running seven sequential stages is slow but not dead — say so.
+      const beat = setInterval(() => emit({ type: 'heartbeat', seconds: Math.round((Date.now()-t0)/1000) }), 15000);
+      return runStage({ complete: a => chat.complete(a), messages, tools, schema, emit, signal, cap,
+                        maxSteps: Math.max(2, stepBudget(chat.steps) - 2),
+                        hook: dispatcher(rt, tools, messages, emit, cap) })
+        .finally(() => clearInterval(beat));
+    },
+  });
 }
-
-const TOOL_NAMES = ['load_skill', 'read_file', 'write_file', 'list_dir', 'run_python'];
 
 const DEFAULT_MODEL_PATH = 'workspace/model.txt';
 
@@ -540,96 +444,26 @@ export function runLocalAgent({ root, prompt, images, history = [], chatCfg, use
       const cap = resultCap(chat.ctx, chat.resultPct);
       const tools = makeTools(root, emit, te, cap, scratch, modelPath);
 
-      /* "Treat it as established; do not re-derive it" contradicted the rule that
-         every reported number comes from a tool call made this turn. Once the
-         history held a full answer to the question being asked again, qwen3.8:27b
-         obeyed the first rule: it called no tools and produced no answer. */
-      const memory = !summary.trim() ? '' : [
-        '', '## Project history', '',
-        'Your own record of this project: a summary of everything older, then the',
-        'latest turns. Use it for what was asked, decided and changed. It is not a',
-        'tool result: a number from it may be stale, and the live model may have',
-        'changed since. Any number you report this turn comes from a tool call you',
-        'make this turn.', '', summary.trim(), '',
-      ].join('\n');
+      // Off means off: with the workflow switched off the tool is not there to call at all.
+      const allTools = !useWorkflow ? tools : withWorkflow(tools, { prompt, emit, cap,
+        run: async a => runWorkflowFile({
+          root, chat, emit, te, scratch, modelPath, loaded: tools.loaded, signal: ctrl.signal, rt,
+          args: { ...a, model: await readFile(join(root, modelPath), 'utf8').catch(() => ''),
+                  workdir: scratch, exec: EXEC_NOTE },
+        }) });
 
       const system = localSystem({
-        tools: useWorkflow ? [...TOOL_NAMES, 'run_mca_workflow'] : TOOL_NAMES,
+        tools: names(allTools),
         liveModel, modelPath, howToRun: howToRun(root, modelPath, scratch),
-        extra: (useWorkflow
-          ? '\n## The workflow\n\nAnything needing numbers — control, elasticities, control ' +
-            'coefficients, steady state in a control context — MUST go through `run_mca_workflow`. ' +
-            'Answer directly only for questions that need no computation.'
-          : '\n## The workflow is off\n\nThe user turned the seven-stage workflow off because it ' +
-            'is slow. Do not ask for it back and do not refuse the work — do the analysis yourself, ' +
-            'keeping every rule above.') + memory,
+        extra: workflowRule(useWorkflow) + summaryBlock(summary),
       });
-
-      const wfDef = { type: 'function', function: {
-        name: 'run_mca_workflow',
-        description: 'Run the enforced mca-tellurium workflow (MCA frame → Tellurium plan → ' +
-                     'execute → validate → interpret → audit). Use for any analysis.',
-        parameters: { type: 'object', properties: {
-          question: { type: 'string', description: 'the question, stated fully and standalone' },
-          needsNumbers: { type: 'boolean' },
-        }, required: ['question'] } } };
-
-      const allTools = { impl: {
-        ...tools.impl,
-        run_mca_workflow: async ({ question, needsNumbers = true }) => {
-          // The model names the workflow and often supplies no question. It is
-          // always this turn's question, so use it rather than failing the stage.
-          question = String(question ?? '').trim() || prompt;
-          emit({ type: 'workflow_start' });
-          const model = await readFile(join(root, modelPath), 'utf8').catch(() => '');
-          const out = await runWorkflowFile({
-            root, chat, emit, te, scratch, modelPath, loaded: tools.loaded, signal: ctrl.signal, rt,
-            args: { question, model, needsNumbers, workdir: scratch, exec: EXEC_NOTE },
-          });
-          emit({ type: 'workflow_done' });
-          return JSON.stringify(out).slice(0, cap);
-        },
-      }, defs: useWorkflow ? [...tools.defs, wfDef] : tools.defs };
 
       // attached photos ride on the question itself, the OpenAI way; a model without vision refuses them
       const messages = [{ role: 'system', content: system }, ...history, userQuestion(!images?.length ? prompt
         : [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))])];
-      const run = toolRunner(allTools.impl, WRITES);
-      let final = '', usedTools = false, computed = false;
-      const recent = [];
-      const call = dispatcher(missingArgs(allTools.defs), run, tools, messages, recent, cap);
-      if (rt.fn) await steer(rt, tools, messages, recent, 0, emit, cap);
-      const STEPS = stepBudget(chat.steps);
-      for (let step = 0; step < STEPS; step++) {
-        if (ctrl.signal.aborted) break;
-        // ...or as soon as it is plainly stuck: a repeated call warned about twice
-        // will be repeated a third time, and each one costs a step.
-        const stuck = run.repeats >= REPEAT_LIMIT;
-        if (stuck) emit({ type: 'log', text: 'same call repeated; asking for the answer' });
-        const wrapUp = step === STEPS - 1 || stuck;
-        const m = await chat.complete({ messages, tools: wrapUp ? undefined : allTools.defs,
-          signal: ctrl.signal, onStream: emit }); // outer turn: thinking and tokens both
-        messages.push(forHistory(m));
-        const calls = m.tool_calls ?? [];
-        if (!calls.length) {
-          final = stripToolSyntax(m.content); break;
-        }
-        usedTools = true;
-        const had = tools.loaded.size;
-        let bad = false;
-        for (const c of calls) {
-          const name = c.function?.name;
-          let a = {};
-          try { a = JSON.parse(c.function?.arguments || '{}'); } catch {}
-          if (name !== 'run_mca_workflow') emit({ type: 'tools', tools: [{ name, input: a }] });
-          else emit({ type: 'tools', tools: [{ name: 'Workflow', input: { workflow: 'mca-tellurium' } }] });
-          if (COMPUTES.has(name)) computed = true;
-          bad = await call(c, name, a) || bad;
-        }
-        if (rt.fn && (bad || tools.loaded.size > had)) await steer(rt, tools, messages, recent, step + 1, emit, cap);
-      }
-      emit({ type: 'result', text: final || NO_ANSWER,
-             isError: !final, noTools: !usedTools, unverified: !computed && hasNumber(final) });
+      emit(await runTurn({ complete: a => chat.complete(a), messages, tools: allTools, emit,
+                           signal: ctrl.signal, cap, maxSteps: stepBudget(chat.steps),
+                           hook: dispatcher(rt, tools, messages, emit, cap) }));
       emit({ type: 'done', code: 0 });
     } catch (e) {
       emit({ type: 'fatal', error: String(e.message || e) });

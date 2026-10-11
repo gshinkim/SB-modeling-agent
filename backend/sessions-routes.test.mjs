@@ -1,24 +1,22 @@
 /* node backend/sessions-routes.test.mjs
-   Boots the real server on a spare port against the real workspace, exercises the
-   four session routes over HTTP, then puts the workspace back exactly as it was. */
+   Boots the real server on a spare port against a temp workspace (MCA_WORKSPACE) and
+   exercises the four session routes over HTTP. */
 import assert from 'node:assert/strict';
-import { readFile, writeFile, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const WORK = join(ROOT, 'workspace');
+const WORK = await mkdtemp(join(tmpdir(), 'mca-ws-'));
 const PORT = 5199;
 const url = p => `http://127.0.0.1:${PORT}${p}`;
 const post = (p, b) => fetch(url(p), { method: 'POST', headers: { 'content-type': 'application/json' },
                                        body: JSON.stringify(b) }).then(r => r.json());
 
-const beforeModel = await readFile(join(WORK, 'model.txt'), 'utf8').catch(() => '');
-const beforeSettings = await readFile(join(WORK, 'settings.json'), 'utf8').catch(() => '');
-
 const srv = spawn('node', [join(ROOT, 'backend/server.mjs')],
-                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1' }, stdio: 'ignore' });
+                  { env: { ...process.env, PORT: String(PORT), MCA_NO_EJECT: '1', MCA_WORKSPACE: WORK }, stdio: 'ignore' });
 const up = async () => { for (let i = 0; i < 60; i++) {
   if (await fetch(url('/api/health')).then(() => true).catch(() => false)) return;
   await new Promise(r => setTimeout(r, 150)); } throw new Error('server never came up'); };
@@ -71,9 +69,7 @@ try {
   assert.ok(!after.sessions.some(s => s.id === 'test-abc'), 'deleted session is gone');
 } finally {
   srv.kill();
-  await rm(join(WORK, 'test-abc'), { recursive: true, force: true });
-  await writeFile(join(WORK, 'model.txt'), beforeModel);   // also when it was empty: a new project's model is
-  if (beforeSettings) await writeFile(join(WORK, 'settings.json'), beforeSettings);
+  await rm(WORK, { recursive: true, force: true });
 }
 
 console.log('session routes ok');

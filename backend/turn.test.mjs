@@ -6,6 +6,8 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTurn } from './turn.mjs';
+import { newTurn } from '../web/js/turn.mjs';
+import { turnLines, parseHistory } from './sessions.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'turn-'));
 const mfile = join(root, 'model.txt'), hfile = join(root, 'history.md');
@@ -74,6 +76,36 @@ await new Promise(r => setTimeout(r, 50));
 assert.equal(started, false);
 assert.equal(await readFile(hfile, 'utf8'), before);
 console.log('stop before start ok');
+
+/* 4. One fold, not two: what a turn leaves in history.md is what the chat's own fold
+      (web/js/turn.mjs) shows for the same events. Each of these once differed. */
+const said = 'Let me think about this step by step while examining the pathway.';
+const SAME = {
+  'a later phase opening like an earlier one is new thinking; an echo of the deltas is not': [
+    { type: 'phase', phase: 'frame' }, { type: 'thinking', text: said }, { type: 'thinking', whole: true, text: said },
+    { type: 'phase', phase: 'plan' }, { type: 'thinking', whole: true, text: said + ' Now the plan.' },
+    { type: 'result', text: 'J = 1.2' }],
+  'a preamble before a tool call is not the answer': [
+    { type: 'delta', text: 'Let me check. ' }, { type: 'tools', tools: [{ name: 'read_file' }] },
+    { type: 'delta', text: 'It is 2.' }, { type: 'result', text: '' }],
+  'unthink moves what streamed as the answer into the thinking': [
+    { type: 'thinking', text: 'a' }, { type: 'delta', text: 'b' }, { type: 'unthink' }, { type: 'delta', text: 'c' }, { type: 'result', text: '' }],
+  'stopped, no result': [
+    { type: 'thinking', text: 'so far' }, { type: 'tools', tools: [{ name: 'python' }] }, { type: 'delta', text: 'half' }],
+};
+for (const [what, evs] of Object.entries(SAME)) {
+  const r = await turn(what, a => {
+    for (const ev of [...evs, { type: 'done', code: 0 }]) a.onEvent(ev);
+    return { kill() {} };
+  });
+  const page = newTurn(what, { log: [], history: [] });
+  for (const ev of r.events) page.feed(ev);
+  assert.ok(page.thoughts || page.body, what);
+  assert.deepEqual(parseHistory(r.history).lines.slice(-turnLines(what, page.thoughts, page.body).length),
+                   turnLines(what, page.thoughts, page.body), what);
+}
+assert.match(parseHistory(await readFile(hfile, 'utf8')).lines.join('\n'), /Now the plan\./);
+console.log('one fold for the page and history ok');
 
 await rm(root, { recursive: true, force: true });
 console.log('turn.test.mjs ok');
