@@ -19,7 +19,7 @@ Claude Code for the AI panel. The rest of the app works without Claude Code.
 | Python | `brew install python@3.14` | `sudo apt install python3.14 python3.14-venv` | `winget install Python.Python.3.14` |
 | Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` | `curl -fsSL https://claude.ai/install.sh \| bash` | PowerShell: `irm https://claude.ai/install.ps1 \| iex` |
 
-Run `claude` once and log in.
+In a terminal, type 'claude' to start claude and log in.
 
 Then, on macOS or Linux in a terminal:
 
