@@ -3,13 +3,14 @@
 An expert agent for creating, fixing, understanding biochemical models: an Antimony model on the left, its
 simulation in the middle, its configuration on the right, and an agent that can
 read, edit, run and analyse the model the same way you can.
+## Note: Claude Code needs a subscription to use, unless you use local ai models using providers such as LmStudio and Ollama
 
 ## Install and run
 
 Runs on macOS, Linux and Windows. You need Git, Node.js 20+, Python 3.10–3.14, and
 Claude Code for the AI panel. The rest of the app works without Claude Code.
 
-## If you haven't installed github, node, python (3.10 - 3.14) , and claude code: 
+## If you haven't installed git (needed to pull this repository), node, python (3.10 - 3.14) , and claude code (to use as agent): 
 
 | | macOS | Linux (Debian/Ubuntu) | Windows |
 |---|---|---|---|
@@ -20,7 +21,7 @@ Claude Code for the AI panel. The rest of the app works without Claude Code.
 
 Run `claude` once and log in.
 
-Then, on macOS or Linux:
+Then, on macOS or Linux in a command line:
 
 ```bash
 git clone https://github.com/gshinkim/SB-modeling-agent.git
