@@ -56,7 +56,7 @@ Windows notes:
 weights are the bulk). `SKIP_LAYLA=1 ./setup.sh` skips the router; the app then uses
 Jev, or no router at all. Rerunning `setup.sh` is safe.
 
-### Updating
+### Updating the application (if there is a newer version) run the following:
 
 ```bash
 git pull
