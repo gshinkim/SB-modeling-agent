@@ -21,7 +21,7 @@ Claude Code for the AI panel. The rest of the app works without Claude Code.
 
 Run `claude` once and log in.
 
-Then, on macOS or Linux in a command line:
+Then, on macOS or Linux in a terminal:
 
 ```bash
 git clone https://github.com/gshinkim/SB-modeling-agent.git
@@ -30,7 +30,7 @@ bash setup.sh     # once: Python venv, Tellurium, the Layla router and its weigh
 bash run.sh       # open http://127.0.0.1:5173
 ```
 
-On Windows, in PowerShell or cmd:
+On Windows, in a terminal:
 
 ```powershell
 git clone https://github.com/gshinkim/SB-modeling-agent.git
