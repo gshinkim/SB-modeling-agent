@@ -44,7 +44,7 @@ not Git Bash. `setup.cmd` finds Git's own bash and runs `setup.sh` with it.
 
 Windows notes:
 
-- Install Claude Code with the native installer above, not `npm install -g`. npm
+- Install Claude Code with the native installer above or go to the Anthropic website and follow the instructions to install claude code. Do not use `npm install -g`. npm
   installs a `claude.cmd` shim, which the app cannot start; the installer gives
   `claude.exe`.
 - Open a new terminal after installing anything, so it is on `PATH`.
