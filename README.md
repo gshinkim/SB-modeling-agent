@@ -9,6 +9,8 @@ read, edit, run and analyse the model the same way you can.
 Runs on macOS, Linux and Windows. You need Git, Node.js 20+, Python 3.10–3.14, and
 Claude Code for the AI panel. The rest of the app works without Claude Code.
 
+## If you haven't installed github, node, python (3.10 - 3.14) , and claude code: 
+
 | | macOS | Linux (Debian/Ubuntu) | Windows |
 |---|---|---|---|
 | Git | `xcode-select --install` | `sudo apt install git curl` | `winget install Git.Git` |
