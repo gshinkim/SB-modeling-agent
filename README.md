@@ -1,6 +1,6 @@
-# MCA Atlas
+# SB modeling agent
 
-A workbench for metabolic control analysis: an Antimony model on the left, its
+An expert agent for creating, fixing, understanding biochemical models: an Antimony model on the left, its
 simulation in the middle, its configuration on the right, and an agent that can
 read, edit, run and analyse the model the same way you can.
 
