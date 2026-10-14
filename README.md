@@ -75,7 +75,9 @@ To update the tools themselves:
 | Python | stay on 3.10–3.14 | stay on 3.10–3.14 | stay on 3.10–3.14 |
 
 If you change the Python version, delete `.venv` and rerun `bash setup.sh`.
+# How to Run the app: (add the images and stuff )
 
+## Developer Documentation
 ## How it fits together
 
 ```
