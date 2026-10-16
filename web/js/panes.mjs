@@ -2,7 +2,8 @@ import { $, esc, store } from './util.mjs';
 import { S } from './state.mjs';
 import { onShow, where, go } from './shell.mjs';
 import { listSessions, currentId, newProject } from './session.mjs';
-import { openProject, deleteProjects } from './chat.mjs';
+import { openProject, deleteProjects, dumpChats } from './chat.mjs';
+import { historySig, historyHtml } from './fullhistory.mjs';
 import { scratchDir, useWorkflow } from './settings.mjs';
 
 /* The small panes around the document: the projects popover on the rail, and the
@@ -119,15 +120,22 @@ async function renderHome(){
   $('#homeRecentSect').hidden = !rows.length;
   const cur = currentId();
   $('#homeRecent').innerHTML = rows.slice(0, HOME_MAX).map(s =>
-    `<button class="home-card" data-id="${esc(s.id)}">
-       <span class="pp-txt"><span class="pp-nm">${esc(s.name || s.id)}</span>
-         <span class="pp-meta">${esc((s.id === cur ? 'Open now · ' : '') + 'updated ' + day(s.updated))}</span></span>
-     </button>`).join('');
+    `<div class="home-card" data-id="${esc(s.id)}">
+       <button class="pp-open" type="button"><span class="pp-txt"><span class="pp-nm">${esc(s.name || s.id)}</span>
+         <span class="pp-meta">${esc((s.id === cur ? 'Open now · ' : '') + 'updated ' + day(s.updated))}</span></span></button>
+       <button class="pp-del" type="button" data-del aria-label="Delete ${esc(s.name || s.id)}">Delete</button>
+     </div>`).join('');
 }
 function initHome(){
   $('#homeRecent').onclick = async e => {
-    const id = e.target.closest('[data-id]')?.dataset.id;
-    if(id && (id === currentId() || await openProject(id))) go('workspace');
+    const card = e.target.closest('[data-id]'), id = card?.dataset.id;
+    if(!id) return;
+    if(e.target.closest('[data-del]')){
+      const nm = card.querySelector('.pp-nm').textContent;
+      if(!confirm('Delete ' + nm + ' with its conversation, history and every file the assistant wrote?\n\nThis can’t be undone.')) return;
+      await deleteProjects([id]); return renderHome();
+    }
+    if(id === currentId() || await openProject(id)) go('workspace');
   };
   $('#homeAll').onclick = () => go('projects');
   $('#homeNew').onsubmit = async e => {            // `required` on the input: no name, no project
@@ -186,22 +194,37 @@ export function renderMeta(c = caption){
     '<div class="k">' + esc(k) + '</div><div>' + esc(v) + '</div>').join('') + '</div>';
 }
 
-/* ---------------- history pane: history.md, the assistant's memory of the project ---------------- */
-async function renderHistory(){
-  const P = $('#historyPane'), id = currentId();
-  const h = id ? await fetch('/api/history?project=' + encodeURIComponent(id)).then(r => r.json()).catch(() => null) : null;
-  if(where().side !== 'history') return;
-  if(!h?.summary && !h?.lines?.length){
-    P.innerHTML = '<p class="muted" style="margin:0;font-size:13px;line-height:1.5">No history yet. Every assistant ' +
-      'turn in this project is recorded in its <code>history.md</code>. That file is what the assistant remembers.</p>';
-    return;
-  }
-  // newest first; each line is "- **who:** text"
-  const items = h.lines.map(l => /^- \*\*(\w+):\*\* ?(.*)$/.exec(l)).filter(Boolean).reverse();
-  P.innerHTML = (h.summary ? '<div class="hist-sum"><span class="hist-item" style="border:0;padding:0">' +
-      '<span class="who">Summary of earlier turns</span></span>' + esc(h.summary) + '</div>' : '') +
-    '<div>' + items.map(m => '<div class="hist-item ' + esc(m[1]) + '"><span class="who">' + esc(m[1]) +
-      '</span>' + esc(m[2]) + '</div>').join('') + '</div>';
+/* ---------------- history pane: the full record of every chat ----------------
+   Not history.md: that is the assistant's compressed memory (a summary plus recent
+   lines, thinking cut short), which is what the assistant reads and stays so. This
+   pane draws the logs chat.mjs keeps, every turn of every chat, unreplayed and
+   uncapped. shell.mjs paints on every nav, tab and side change, so the pane is
+   rebuilt only when the project or its logs moved, never per paint. */
+let histSig = null;
+function renderHistory(){
+  const P = $('#historyPane'), chats = dumpChats(), sig = currentId() + '|' + historySig(chats);
+  if(sig === histSig) return;
+  histSig = sig;
+  const body = historyHtml(chats);
+  P.innerHTML = '<p class="fh-note muted">Full record of this project. The assistant itself reads a compressed ' +
+      'summary (<code>history.md</code>).</p>' +
+    '<details class="fh-mem"><summary>What the assistant reads: history.md</summary><div class="fh-mem-body"></div></details>' +
+    (body || '<p class="muted fh-note">No conversation yet. Everything you ask and everything the assistant ' +
+      'thinks and answers will be recorded here in full.</p>');
+  // history.md is fetched only when someone opens it, and fresh each time
+  const mem = P.querySelector('.fh-mem');
+  mem.addEventListener('toggle', async () => {
+    if(!mem.open) return;
+    const B = mem.querySelector('.fh-mem-body'), id = currentId();
+    B.textContent = 'Loading…';
+    const h = id ? await fetch('/api/history?project=' + encodeURIComponent(id)).then(r => r.json()).catch(() => null) : null;
+    B.innerHTML = !h?.summary && !h?.lines?.length ? '<span class="muted">Empty: no turn recorded yet.</span>' :
+      (h.summary ? '<div class="hist-sum">' + esc(h.summary) + '</div>' : '') +
+      '<div class="fh-mem-lines mono">' + esc(h.lines.join('\n')) + '</div>';
+  });
+  // newest turn in view; twice, since off-screen turns (content-visibility) only take
+  // their real height once laid out, so the first scrollHeight is an estimate
+  P.scrollTop = P.scrollHeight; requestAnimationFrame(() => { P.scrollTop = P.scrollHeight; });
 }
 
 export function initPanes(hooks){
@@ -220,5 +243,13 @@ export function initPanes(hooks){
     if(side === 'history') renderHistory();
     if(tab === 'meta') renderMeta();
   });
+  /* A turn that ends, or a project that opens, changes #msgs; logs change with it.
+     Debounced, since a streaming answer mutates it per token, and the signature
+     check makes the rest free. */
+  let hTimer = 0;
+  new MutationObserver(() => {
+    if(where().side !== 'history' || hTimer) return;
+    hTimer = setTimeout(() => { hTimer = 0; if(where().side === 'history') renderHistory(); }, 400);
+  }).observe($('#msgs'), { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   syncIdentity();                 // the name hook has only now arrived; an empty model runs nothing that would do it
 }

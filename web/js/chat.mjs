@@ -1,20 +1,19 @@
-import { $, store, flash } from './util.mjs';
+import { $, store, flash, esc } from './util.mjs';
 import { S } from './state.mjs';
 import * as api from './api.mjs';
 import { resolveModel, useWorkflow, scratchDir, router, openSettings } from './settings.mjs';
 import { runBrowserAgent } from './agent.mjs';
 import { renderMarkdown } from './md.mjs';
+import './latex.mjs';            // <latex-doc> and late MathJax upgrades for what renderMarkdown emits
 import { downloadChat } from './export.mjs';
 import { currentId, savedId, saveSoon, openSessionById, deleteSessionById } from './session.mjs';
 import { pickSession } from './sessionpicker.mjs';
 import { showSide, go } from './shell.mjs';
-import { newTurn } from './turn.mjs';
+import { newTurn, stepText, lineDiff } from './turn.mjs';
 
 
 let abort = null, onModelChanged = () => {};
 export const setOnModelChanged = fn => { onModelChanged = fn; };
-
-const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
 /* Conversations live in this module: no localStorage. On a local install session.mjs
    saves them with the project (dumpChats) and opening the project brings them back
@@ -68,8 +67,7 @@ export function loadChats(saved){
     for(const turn of turns){
       const d = document.createElement('div'); d.className = 'msg me';
       d.textContent = turn.q; thread.append(d);
-      const a = document.createElement('div'); a.className = 'msg ai';
-      a.innerHTML = renderMarkdown(turn.a || '*(no answer)*'); thread.append(a);
+      thread.append(replayAnswer(turn));
     }
   }
   if(!chats.length) makeChat(); else show(chats.at(-1).id);
@@ -118,6 +116,15 @@ function show(id){
   chats.forEach(c => { c.thread.hidden = c.id !== id; });
   renderChatPick();
   $('#msgs').scrollTop = 1e9;
+}
+
+/** Open a search hit's conversation, including one that is not currently selected. */
+export function openChat(id){
+  const c = chats.find(chat => String(chat.id) === String(id));
+  if(!c) return false;
+  if(active !== c.id) stopTurn();
+  go('workspace'); showSide('chat'); show(c.id);
+  return true;
 }
 
 function renderChatPick(){
@@ -172,15 +179,88 @@ const base64 = f => new Promise((ok, no) => { const r = new FileReader();
    and status line, painted from the events fed to the returned handle(). send() uses
    it for a turn it starts, resumeLive() for one found already running. `started` is
    when the turn began, for the "Thought for" time. */
+/* The pieces of an answer, shared by a live turn (turnUi) and one replayed when a
+   project is reopened (loadChats), so both look the same. */
+function stepsEl(){
+  const el = document.createElement('div'); el.className = 'agent-run'; el.hidden = true;
+  el.innerHTML = '<div class="ar-hd">Agent execution</div><ol class="ar-steps"></ol>';
+  return el;
+}
+function stepLi(label, n){
+  const li = document.createElement('li');
+  li.className = label.startsWith('phase:') ? 'ar-step phase' : 'ar-step';
+  li.title = label.startsWith('phase:') ? '' : label;
+  li.textContent = stepText(label) + (n > 1 ? ' ×' + n : '');
+  return li;
+}
+function thinkEl(){
+  // native <details>: free keyboard access, free open/close state, no JS
+  const el = document.createElement('details'); el.className = 'think'; el.hidden = true;
+  el.innerHTML = '<summary><span class="tk-dot"></span><span class="tk-label">Thinking</span>' +
+                 '<span class="tk-time"></span></summary><div class="tk-body"></div>';
+  return el;
+}
+const thoughtFor = secs => 'Thought for ' + (secs >= 60 ? Math.floor(secs / 60) + 'm ' + (secs % 60) + 's' : secs + 's');
+
+/** A logged turn's answer, as it looked when it ran. Turns saved before steps were
+    logged have only `tools`, one per name. */
+function replayAnswer(turn){
+  const a = document.createElement('div'); a.className = 'msg ai';
+  const steps = turn.steps ?? (turn.tools ?? []).map(x => [x, 1]);
+  if(steps.length){
+    const run = stepsEl(); run.hidden = false; run.classList.add('ended');
+    const ol = run.querySelector('ol'); for(const [x, n] of steps) ol.append(stepLi(x, n));
+    a.append(run);
+  }
+  if(turn.thoughts){
+    const tk = thinkEl(); tk.hidden = false; tk.classList.add('done');
+    tk.querySelector('.tk-label').textContent = turn.secs ? thoughtFor(turn.secs) : 'Thinking';
+    tk.querySelector('.tk-body').textContent = turn.thoughts;
+    a.append(tk);
+  }
+  for(const ch of turn.changes ?? []) a.append(changeCard(ch.before, ch.after, ch));
+  const txt = document.createElement('div'); txt.className = 'txt';
+  txt.innerHTML = renderMarkdown(turn.a || '*(no answer)*');
+  a.append(txt);
+  return a;
+}
+
+/* The agent's model edit, shown where it happened: the lines it changed, what
+   Tellurium made of the new model (main.mjs announces each run as 'mca:run'), and
+   a way back to the model as it was. */
+function changeCard(before, after, rec = { before, after, run: null }){
+  const { removed, added } = lineDiff(before, after);
+  const lines = [...removed.map(l => '<div class="del">− ' + esc(l) + '</div>'),
+                 ...added.map(l => '<div class="add">+ ' + esc(l) + '</div>')];
+  const card = document.createElement('div'); card.className = 'change-card';
+  card.innerHTML = '<div class="cc-hd"><span class="cc-t">Model change</span>' +
+    '<span class="cc-n mono"><span class="add">+' + added.length + '</span> <span class="del">−' + removed.length + '</span></span>' +
+    '<span class="spacer"></span><button class="btn sm" type="button" data-revert>Revert</button></div>' +
+    '<div class="cc-diff mono">' + (lines.slice(0, 14).join('') || '<div class="muted">Only the order of lines changed</div>') +
+    (lines.length > 14 ? '<div class="muted">… ' + (lines.length - 14) + ' more</div>' : '') + '</div>' +
+    '<div class="cc-run"></div>';
+  const run = card.querySelector('.cc-run');
+  // `rec` is what the turn's log keeps of this card: a replayed card shows the saved result
+  const showRun = r => { run.textContent = r.text; run.classList.add(r.ok ? 'ok' : 'bad'); };
+  if(rec.run) showRun(rec.run);
+  else {
+    run.textContent = 'Re-solving with Tellurium…';
+    addEventListener('mca:run', e => { rec.run = e.detail; showRun(e.detail); saveSoon(); }, { once: true });
+  }
+  card.querySelector('[data-revert]').onclick = e => {
+    if(!onModelChanged(before)) return;
+    e.target.disabled = true; e.target.textContent = 'Reverted';
+  };
+  return card;
+}
+
 function turnUi(c, v, started = Date.now()){
   $('#send').textContent='Stop';
   const wrap = bubble('ai','');
-  const phase = document.createElement('div'); phase.className='tools'; wrap.append(phase);
-
-  // native <details>: free keyboard access, free open/close state, no JS
-  const think = document.createElement('details'); think.className='think'; think.hidden = true;
-  think.innerHTML = '<summary><span class="tk-dot"></span><span class="tk-label">Thinking</span>'+
-                    '<span class="tk-time"></span></summary><div class="tk-body"></div>';
+  // what the agent did, as a checklist: the last step spins until the turn ends
+  const phase = stepsEl(), steps = phase.querySelector('ol');
+  wrap.append(phase);
+  const think = thinkEl();
   wrap.append(think);
   const tkBody = think.querySelector('.tk-body');
   const tkLabel = think.querySelector('.tk-label');
@@ -191,6 +271,7 @@ function turnUi(c, v, started = Date.now()){
   // mid-stream erased everything the model had already said
   const stat = document.createElement('div'); stat.className='stat-line'; wrap.append(stat);
   const t = newTurn(v, c);
+  t.started = started;
   const els = new Map();
   let shown;
 
@@ -198,9 +279,8 @@ function turnUi(c, v, started = Date.now()){
     for(const x of t.seen){
       const isPhase = x.startsWith('phase:'), n = t.chips.get(x);
       let el = els.get(x);
-      if(!el){ el=document.createElement('span'); el.className = isPhase ? 'tool phase' : 'tool';
-               phase.append(el); els.set(x, el); }
-      el.textContent = isPhase ? x.slice(6) : n > 1 ? x+' ×'+n : x;
+      if(!el){ el = stepLi(x, n); steps.append(el); els.set(x, el); phase.hidden = false; }
+      el.textContent = stepText(x) + (n > 1 ? ' ×'+n : '');
     }
   };
   // only when it changed: rewriting the line restarts its dots animation
@@ -244,7 +324,7 @@ function turnUi(c, v, started = Date.now()){
         else text.textContent = '(no answer returned)';
         if(t.thoughts){
           const secs = Math.max(1, Math.round((Date.now()-started)/1000));
-          tkLabel.textContent = 'Thought for '+(secs>=60 ? Math.floor(secs/60)+'m '+(secs%60)+'s' : secs+'s');
+          tkLabel.textContent = thoughtFor(secs);
           tkTime.textContent = '';
           think.classList.add('done');
         }
@@ -257,13 +337,19 @@ function turnUi(c, v, started = Date.now()){
                     m.textContent = (ev.ms/1000).toFixed(1)+'s · '+(ev.turns??0)+' turns'; wrap.append(m); }
         return;
       }
-      if(ev.type==='model_changed'){ onModelChanged(ev.src); return; }
+      if(ev.type==='model_changed'){
+        const before = $('#model').value;
+        if(onModelChanged(ev.src)){ const rec = { before, after: ev.src, run: null }; t.changes.push(rec);
+                                    wrap.insertBefore(changeCard(before, ev.src, rec), text); }
+        return;
+      }
       if(ev.type==='fatal'){ text.innerHTML = '<span class="err">'+esc(ev.error)+'</span>'; return; }
       if(ev.type==='done' || ev.type==='closed'){
+        phase.classList.add('ended');
         if(t.body && !text.innerHTML.trim()) text.innerHTML = renderMarkdown(t.body);
         if(t.thoughts && !think.classList.contains('done')){
           const secs = Math.max(1, Math.round((Date.now()-started)/1000));
-          tkLabel.textContent = 'Thought for '+secs+'s';
+          tkLabel.textContent = thoughtFor(secs);
           think.classList.add('done');
         }
         if(!t.body && !t.failed && ev.type==='done' && ev.code) text.innerHTML =
@@ -390,7 +476,43 @@ export async function deleteProjects(ids){
   if(failed.length) alert('Could not delete:\n' + failed.join('\n'));
 }
 
+/* The inspector's left edge is a drag handle. Width lives in --inspector (app.css)
+   set on the element itself; the chart listens for window resize to redraw. */
+/* One handle between the conversation and the rest. In the Analysis layout it sits
+   on the inspector's left edge and sizes the inspector; in the Agent layout the
+   conversation is the middle and the handle, on its right edge, sizes the
+   model-and-plot column (--rightW) instead. */
+function initResize(){
+  const side = $('#inspector'), stage = $('#stage'), right = $('#viewWorkspace'), grip = document.createElement('div');
+  grip.className = 'side-grip'; grip.tabIndex = 0; grip.title = 'Drag to resize';
+  grip.setAttribute('role', 'separator'); grip.setAttribute('aria-orientation', 'vertical');
+  grip.setAttribute('aria-label', 'Resize side panel');
+  side.prepend(grip);
+  const size = w => side.style.setProperty('--inspector',
+    Math.round(Math.min(Math.max(w, 280), Math.max(280, innerWidth * .6))) + 'px');
+  const sizeRight = w => stage.style.setProperty('--rightW',
+    Math.round(Math.min(Math.max(w, 320), Math.max(320, innerWidth * .7))) + 'px');
+  const agent = () => stage.classList.contains('agent');
+  // the width being dragged, and how a pointer moving right changes it
+  const width = () => agent() ? right.offsetWidth : side.offsetWidth;
+  const set = w => { (agent() ? sizeRight : size)(w); dispatchEvent(new Event('resize')); };
+  const save = () => agent() ? store.set('rightW', right.offsetWidth) : store.set('inspectorW', side.offsetWidth);
+  const w = store.get('inspectorW', 0); if(w) size(w);
+  const rw = store.get('rightW', 0); if(rw) sizeRight(rw);
+  grip.onpointerdown = e => {
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    const x0 = e.clientX, w0 = width();
+    grip.onpointermove = e => set(w0 + x0 - e.clientX);
+    grip.onpointerup = grip.onpointercancel = () => { grip.onpointermove = grip.onpointerup = null; save(); };
+  };
+  grip.onkeydown = e => {
+    const d = { ArrowLeft: 20, ArrowRight: -20 }[e.key];
+    if(d){ e.preventDefault(); set(width() + d); save(); }
+  };
+}
+
 export function initChat(){
+  initResize();
   $('#chatSave').onclick = exportChat;
   $('#newChat').onclick = ()=>{ stopTurn(); makeChat(); $('#ask').focus(); };
   $('#delChat').onclick = deleteChat;

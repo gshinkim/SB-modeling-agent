@@ -83,7 +83,7 @@ else {
     req.on('end', () => {
       turn++;
       // the rejection must say where the syntax is, or the model keeps guessing
-      if (turn === 5) said = JSON.parse(b).messages.at(-1).content;
+      if (turn === 6) said = JSON.parse(b).messages.at(-1).content;
       // the Skills first, or the write is refused by the Skill gate before the
       // Antimony check this test is about ever runs
       const skill = ['mca', 'pathway-modeling', 'tellurium'][turn - 1];
@@ -91,6 +91,9 @@ else {
         ? { tool_calls: [{ index: 0, id: 's' + turn, type: 'function', function: { name: 'load_skill',
             arguments: JSON.stringify({ name: skill }) } }] }
         : turn === 4
+        ? { tool_calls: [{ index: 0, id: 'r1', type: 'function', function: { name: 'read_file',
+            arguments: JSON.stringify({ path: 'skills/pathway-modeling/references/02_kinetics_in_a_nutshell.md' }) } }] }
+        : turn === 5
         ? { tool_calls: [{ index: 0, id: 'w1', type: 'function', function: { name: 'write_file',
             arguments: JSON.stringify({ path: 'workspace/model.txt', content: 'this is not antimony {{' }) } }] }
         : { content: 'done' };
@@ -251,7 +254,11 @@ else {
   assert.equal(run.repeats, 0, 'a first refusal is not a repeat');
   modelGate(run, new Set(['tellurium']), true);
   assert.equal(run.repeats, 1);
-  assert.equal(modelGate(run, new Set(['pathway-modeling']), true), null);
+  assert.match(modelGate(run, new Set(['pathway-modeling']), true), /read_file/,
+    'loading the index alone does not satisfy the gate');
+  assert.match(modelGate(run, new Set(), true, new Set(['reference.md'])), /load_skill/,
+    'reading without loading the index does not satisfy the gate');
+  assert.equal(modelGate(run, new Set(['pathway-modeling']), true, new Set(['reference.md'])), null);
   assert.equal(modelGate(run, new Set(), false), null, 'run_python and other writes are not gated');
   console.log('ok (model write gate)');
 }
@@ -267,8 +274,8 @@ else {
   console.log('ok (workflow compiles and reaches stage 1)');
 }
 
-// The Skill router: an auto-load before step 0 is a real load (modelGate lets the
-// model write through), a round with an error is routed again with what happened,
+// The Skill router: an auto-load before step 0 plus a reference read lets the
+// model write through; a round with an error is routed again with what happened,
 // and the hint rides on the end of the last tool result.
 {
   const { mkdtemp, rm } = await import('node:fs/promises');
@@ -285,7 +292,8 @@ else {
       bodies.push(JSON.parse(b));
       const call = (id, name, args) => ({ tool_calls: [{ index: 0, id, type: 'function',
         function: { name, arguments: JSON.stringify(args) } }] });
-      const delta = [call('w1', 'write_file', { path: modelPath, content: 'S1 -> S2; k1*S1' }),
+      const delta = [call('ref1', 'read_file', { path: 'skills/pathway-modeling/references/02_kinetics_in_a_nutshell.md' }),
+                     call('w1', 'write_file', { path: modelPath, content: 'S1 -> S2; k1*S1' }),
                      call('r1', 'read_file', { path: 'no/such/file' })][bodies.length - 1]
         ?? { content: 'done' };
       res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -311,7 +319,7 @@ else {
   assert.ok(shown.some(t => t.name === 'load_skill' && t.input.name === 'pathway-modeling' && t.input.by === 'router'));
   const msgs = bodies.at(-1).messages;
   assert.match(bodies[0].messages.at(-1).content, /^build it[\s\S]*\[router\] loaded the pathway-modeling Skill[\s\S]*name: pathway-modeling/);
-  assert.match(msgs.find(m => m.tool_call_id === 'w1').content, /^wrote /, 'auto-load satisfied modelGate');
+  assert.match(msgs.find(m => m.tool_call_id === 'w1').content, /^wrote /, 'auto-load plus reference read satisfied modelGate');
   assert.equal(calls.length, 2, 'the clean write round was not routed');
   assert.deepEqual(calls[1].loaded, ['pathway-modeling']);
   assert.match(calls[1].recent.at(-1), /^read_file no\/such\/file -> ERROR: /);

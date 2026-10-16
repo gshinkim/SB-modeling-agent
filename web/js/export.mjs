@@ -1,5 +1,6 @@
 import { $, css, fmt, slug } from './util.mjs';
 import { S } from './state.mjs';
+import { draw } from './chart.mjs';
 
 /* The chart is already SVG with literal colours baked into attributes, so export
    is a clone + a background + a font-family away. PNG goes through a canvas. */
@@ -16,8 +17,9 @@ export function save(blob, name){
 
 function svgString(scale = 1){
   const src = $('#chart');
-  const w = src.clientWidth, h = src.clientHeight;
+  const w = src.clientWidth || S.geom?.W || 800, h = src.clientHeight || S.geom?.H || 480;
   const svg = src.cloneNode(true);
+  draw({ svg, width: w, height: h });
   svg.setAttribute('xmlns','http://www.w3.org/2000/svg');
   svg.setAttribute('width', w*scale);
   svg.setAttribute('height', h*scale);

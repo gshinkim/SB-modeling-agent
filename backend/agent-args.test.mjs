@@ -58,4 +58,15 @@ const base = { root: '/tmp/app', prompt: 'hi', sid: 'abc-123', model: '',
   assert.ok(args[args.indexOf('--append-system-prompt') + 1].includes(join('/tmp/app', 'skills')));
 }
 
+{
+  // the live model is gated on pathway-modeling having been used (backend/model-gate.mjs)
+  const args = buildArgs({ ...base, resuming: false, modelPath: 'projects/p1/model.txt' });
+  const { hooks } = JSON.parse(args[args.indexOf('--settings') + 1]);
+  const [h] = hooks.PreToolUse;
+  assert.match(h.matcher, /Edit/);
+  assert.match(h.matcher, /Write/);
+  assert.ok(h.hooks[0].command.includes(join('/tmp/app', 'backend', 'model-gate.mjs')));
+  assert.ok(h.hooks[0].command.includes(join('/tmp/app', 'projects/p1/model.txt')), 'the project model, not the default');
+}
+
 console.log('agent args ok');

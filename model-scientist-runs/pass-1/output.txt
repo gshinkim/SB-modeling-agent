@@ -1,0 +1,212 @@
+te.getVersionInfo(): [('tellurium', '2.2.13.1'), ('roadrunner', '2.10.0'), ('antimony', '3.2.0'), ('libsbml', '5.21.1'), ('libsedml', '2.0.33')]
+python 3.12.14 ; numpy 2.5.3
+==============================================================================
+MODEL A
+==============================================================================
+
+model A()
+  J1: $X0 -> S;  k1*X0
+  J2: S -> $X1;  k2*S
+  X0 = 10; X1 = 0; S = 0
+  k1 = 0.3; k2 = 0.1
+end
+
+[A] getFloatingSpeciesIds(): ['S']
+[A] getBoundarySpeciesIds(): ['X0', 'X1']
+[A] getReactionIds(): ['J1', 'J2']
+[A] getGlobalParameterIds(): ['k1', 'k2'] (expected set ['k1', 'k2']; match=True)
+[A] global parameter values: {'k1': 0.3, 'k2': 0.1}
+[A] boundary values: {'X0': 10.0, 'X1': 0.0}
+[A] getFullStoichiometryMatrix():
+     J1, J2
+S [[  1, -1]]
+
+[A] te.getODEsFromModel(r):
+
+vJ1 = k1*X0
+vJ2 = k2*S
+
+dS/dt = vJ1 - vJ2
+
+[A] getNumConservedMoieties(): 0 ; conservedMoietyAnalysis=False
+[A] getSteadyStateSolver(): < roadrunner.SteadyStateSolver() "nleq2" 'auto_moiety_analysis': true, 'allow_presimulation': false, 'presimulation_time': 100, 'presimulation_times': [0.1, 1, 10, 100, 1000, 10000], 'presimulation_maximum_steps': 100, 'allow_approx': false, 'approx_tolerance': 1e-06, 'approx_maximum_steps': 10000, 'approx_time': 10000, 'relative_tolerance': 1e-12, 'maximum_iterations': 100, 'minimum_damping': 1e-20, 'broyden_method': 0, 'linearity': 3 >
+
+[A] steadyState() return value (sum of squares of rates of change): 4.440892098500626e-16
+[A] getRatesOfChange() labelled by getFloatingSpeciesIds(): {'S': np.float64(4.440892098500626e-16)}
+[A] getReactionRates() labelled by getReactionIds(): {'J1': np.float64(3.0), 'J2': np.float64(2.9999999999999996)}
+[A] r['[S]'] = 29.999999999999993
+[A] E (scaled elasticity, reaction x floating species):
+    E[J1,S] = np.float64(0.0)
+    E[J2,S] = np.float64(1.0000000000000036)
+[A] FCC (scaled, flux x reaction):
+    FCC[J1,J1] = np.float64(1.0)
+    FCC[J1,J2] = np.float64(0.0)
+    FCC[J2,J1] = np.float64(1.0000000000000033)
+    FCC[J2,J2] = np.float64(-3.3306690738754696e-15)
+[A] row used for (C^J_e1, C^J_e2): J1
+[A] row difference FCC[J1,.]-FCC[J2,.]: np.float64(-3.3306690738754696e-15), np.float64(3.3306690738754696e-15)
+[A] summation residual  C1+C2-1            = np.float64(0.0)
+[A] connectivity residual C1*E1S + C2*E2S   = np.float64(0.0)
+[A] getRatesOfChange() after matrix calls: {'S': np.float64(0.0)}
+[A] steadyStateSelections=['[S]','J1','J2']; getSteadyStateValuesNamedArray():
+    [S], J1, J2
+ [[  30,  3,  3]]
+
+[A] getRatesOfChange() after named-array call: [np.float64(0.0)]
+[A] getFullJacobian():
+        S
+S [[ -0.1]]
+
+[A] getFullEigenValues(): raw=array([-0.1+0.j]) shape=(1,) real=[-0.10000000000000034] imag=[0.0]
+[A] getScaledFloatingSpeciesElasticity('J1','S') = 0.0
+[A] getScaledFloatingSpeciesElasticity('J2','S') = 1.0000000000000033
+[A] getEE('J1','S') = 0.0
+[A] getEE('J2','S') = 1.0000000000000033
+[A] getEE('J1','k1') = 0.9999999999999983
+[A] getEE('J2','k2') = 0.9999999999999983
+[A] getRatesOfChange() after getEE calls: [np.float64(0.0)]
+[A] getCC('J1','k1') = 0.9999999999999983
+[A] getCC('J1','k2') = 0.0
+[A] getCC summation residual = -1.6653345369377348e-15
+[A] getCC connectivity residual (with matrix E) = np.float64(0.0)
+[A] getCC minus matrix FCC: np.float64(-1.6653345369377348e-15), np.float64(0.0)
+[A] getRatesOfChange() after getCC calls: [np.float64(0.0)]
+[A] steadyState() re-read after getCC: 0.0
+[A] getDiffStepSize() = 0.02 ; getSteadyStateThreshold() = 0.01
+[A] h=0.002 ss_return=0.0 roc={'S': np.float64(0.0)} C1=np.float64(1.0) C2=np.float64(0.0) E1S=np.float64(0.0) E2S=np.float64(0.9999999999999886) summ=np.float64(0.0) conn=np.float64(0.0)
+[A] h=0.02 ss_return=0.0 roc={'S': np.float64(0.0)} C1=np.float64(1.0) C2=np.float64(0.0) E1S=np.float64(0.0) E2S=np.float64(1.0000000000000033) summ=np.float64(0.0) conn=np.float64(0.0)
+[A] h=0.2 ss_return=0.0 roc={'S': np.float64(0.0)} C1=np.float64(1.0) C2=np.float64(0.0) E1S=np.float64(0.0) E2S=np.float64(1.0000000000000002) summ=np.float64(0.0) conn=np.float64(0.0)
+[A] spread over h (max-min) of C1 = np.float64(0.0)
+[A] spread over h (max-min) of C2 = np.float64(0.0)
+[A] spread over h (max-min) of E1S = np.float64(0.0)
+[A] spread over h (max-min) of E2S = np.float64(1.4765966227514582e-14)
+[A] spread over h (max-min) of summ = np.float64(0.0)
+[A] spread over h (max-min) of conn = np.float64(0.0)
+[A] DiffStepSize restored to 0.02
+ASSUMPTION: Model B keeps k1=0.3, k2=0.1, X0=10 from the base model, S starts at 0; only k1r=0.2, k2r=0.05, X1=1 (and multipliers e1=e2=1) are new.
+==============================================================================
+MODEL B
+==============================================================================
+
+model B()
+  J1: $X0 -> S;  e1*(k1*X0 - k1r*S)
+  J2: S -> $X1;  e2*(k2*S - k2r*X1)
+  X0 = 10; X1 = 1; S = 0
+  k1 = 0.3; k1r = 0.2; k2 = 0.1; k2r = 0.05
+  e1 = 1; e2 = 1
+end
+
+[B] getFloatingSpeciesIds(): ['S']
+[B] getBoundarySpeciesIds(): ['X0', 'X1']
+[B] getReactionIds(): ['J1', 'J2']
+[B] getGlobalParameterIds(): ['e1', 'k1', 'k1r', 'e2', 'k2', 'k2r'] (expected set ['k1', 'k1r', 'k2', 'k2r', 'e1', 'e2']; match=True)
+[B] global parameter values: {'e1': 1.0, 'k1': 0.3, 'k1r': 0.2, 'e2': 1.0, 'k2': 0.1, 'k2r': 0.05}
+[B] boundary values: {'X0': 10.0, 'X1': 1.0}
+[B] getFullStoichiometryMatrix():
+     J1, J2
+S [[  1, -1]]
+
+[B] te.getODEsFromModel(r):
+
+vJ1 = e1*(k1*X0-k1r*S)
+vJ2 = e2*(k2*S-k2r*X1)
+
+dS/dt = vJ1 - vJ2
+
+[B] getNumConservedMoieties(): 0 ; conservedMoietyAnalysis=False
+[B] getSteadyStateSolver(): < roadrunner.SteadyStateSolver() "nleq2" 'auto_moiety_analysis': true, 'allow_presimulation': false, 'presimulation_time': 100, 'presimulation_times': [0.1, 1, 10, 100, 1000, 10000], 'presimulation_maximum_steps': 100, 'allow_approx': false, 'approx_tolerance': 1e-06, 'approx_maximum_steps': 10000, 'approx_time': 10000, 'relative_tolerance': 1e-12, 'maximum_iterations': 100, 'minimum_damping': 1e-20, 'broyden_method': 0, 'linearity': 3 >
+
+[B] steadyState() return value (sum of squares of rates of change): 8.881784197001252e-16
+[B] getRatesOfChange() labelled by getFloatingSpeciesIds(): {'S': np.float64(8.881784197001252e-16)}
+[B] getReactionRates() labelled by getReactionIds(): {'J1': np.float64(0.9666666666666672), 'J2': np.float64(0.9666666666666663)}
+[B] r['[S]'] = 10.166666666666664
+[B] E (scaled elasticity, reaction x floating species):
+    E[J1,S] = np.float64(-2.103448275862058)
+    E[J2,S] = np.float64(1.0517241379310338)
+[B] FCC (scaled, flux x reaction):
+    FCC[J1,J1] = np.float64(0.33333333333333337)
+    FCC[J1,J2] = np.float64(0.666666666666667)
+    FCC[J2,J1] = np.float64(0.33333333333333315)
+    FCC[J2,J2] = np.float64(0.6666666666666667)
+[B] row used for (C^J_e1, C^J_e2): J1
+[B] row difference FCC[J1,.]-FCC[J2,.]: np.float64(2.220446049250313e-16), np.float64(2.220446049250313e-16)
+[B] summation residual  C1+C2-1            = np.float64(4.440892098500626e-16)
+[B] connectivity residual C1*E1S + C2*E2S   = np.float64(3.4416913763379853e-15)
+[B] getRatesOfChange() after matrix calls: {'S': np.float64(-4.440892098500626e-16)}
+[B] steadyStateSelections=['[S]','J1','J2']; getSteadyStateValuesNamedArray():
+        [S],       J1,       J2
+ [[ 10.1667, 0.966667, 0.966667]]
+
+[B] getRatesOfChange() after named-array call: [np.float64(2.220446049250313e-16)]
+[B] getFullJacobian():
+        S
+S [[ -0.3]]
+
+[B] getFullEigenValues(): raw=array([-0.3+0.j]) shape=(1,) real=[-0.2999999999999997] imag=[0.0]
+[B] getScaledFloatingSpeciesElasticity('J1','S') = -2.1034482758620667
+[B] getScaledFloatingSpeciesElasticity('J2','S') = 1.0517241379310336
+[B] getEE('J1','S') = -2.1034482758620667
+[B] getEE('J2','S') = 1.0517241379310336
+[B] getEE('J1','e1') = 0.999999999999997
+[B] getEE('J2','e2') = 0.9999999999999972
+[B] getRatesOfChange() after getEE calls: [np.float64(2.220446049250313e-16)]
+[B] getCC('J1','e1') = 0.3333332911559316
+[B] getCC('J1','e2') = 0.6666666613980107
+[B] getCC summation residual = -4.7446057749311876e-08
+[B] getCC connectivity residual (with matrix E) = np.float64(8.317681354785833e-08)
+[B] getCC minus matrix FCC: np.float64(-4.217740179335294e-08), np.float64(-5.2686562890258415e-09)
+[B] getRatesOfChange() after getCC calls: [np.float64(2.220446049250313e-16)]
+[B] steadyState() re-read after getCC: 2.220446049250313e-16
+[B] getDiffStepSize() = 0.02 ; getSteadyStateThreshold() = 0.01
+[B] h=0.002 ss_return=2.220446049250313e-16 roc={'S': np.float64(2.220446049250313e-16)} C1=np.float64(0.33333333333333337) C2=np.float64(0.6666666666666665) E1S=np.float64(-2.1034482758620663) E2S=np.float64(1.0517241379310334) summ=np.float64(-1.1102230246251565e-16) conn=np.float64(0.0)
+[B] h=0.02 ss_return=2.220446049250313e-16 roc={'S': np.float64(2.220446049250313e-16)} C1=np.float64(0.33333333333333326) C2=np.float64(0.6666666666666666) E1S=np.float64(-2.1034482758620667) E2S=np.float64(1.0517241379310336) summ=np.float64(-1.1102230246251565e-16) conn=np.float64(2.220446049250313e-16)
+[B] h=0.2 ss_return=2.220446049250313e-16 roc={'S': np.float64(2.220446049250313e-16)} C1=np.float64(0.33333333333333337) C2=np.float64(0.6666666666666665) E1S=np.float64(-2.1034482758620685) E2S=np.float64(1.0517241379310347) summ=np.float64(-1.1102230246251565e-16) conn=np.float64(1.1102230246251565e-16)
+[B] spread over h (max-min) of C1 = np.float64(1.1102230246251565e-16)
+[B] spread over h (max-min) of C2 = np.float64(1.1102230246251565e-16)
+[B] spread over h (max-min) of E1S = np.float64(2.220446049250313e-15)
+[B] spread over h (max-min) of E2S = np.float64(1.3322676295501878e-15)
+[B] spread over h (max-min) of summ = np.float64(0.0)
+[B] spread over h (max-min) of conn = np.float64(2.220446049250313e-16)
+[B] DiffStepSize restored to 0.02
+[B] values read: [S]=10.166666666666666 k1=0.3 k1r=0.2 k2=0.1 k2r=0.05 [X0]=10.0 [X1]=1.0
+[B] q1=1.4999999999999998 q2=2.0 ; X0*q1*q2=29.999999999999996 vs X1=1.0 ; forward condition X0*q1*q2>X1: True
+[B] rho1 = k1r*[S]/(k1*[X0]) = 0.6777777777777777 ; rho2 = k2r*[X1]/(k2*[S]) = 0.049180327868852465
+[B] -rho1/(1-rho1) = -2.103448275862068 ; matrix E[J1,S] = np.float64(-2.103448275862058) ; difference = np.float64(1.021405182655144e-14)
+[B] 1/(1-rho2)     = 1.0517241379310345 ; matrix E[J2,S] = np.float64(1.0517241379310338) ; difference = np.float64(-6.661338147750939e-16)
+[B] eq 6.9 form (1-rho1) : rho1*(1-rho2) = 0.3222222222222223 : 0.6444444444444444 -> normalised 0.3333333333333334, 0.6666666666666666
+[B] eq 6.6 form q1*q2/k1 : q2/k2 = 9.999999999999998 : 20.0 -> normalised 0.33333333333333326, 0.6666666666666666
+[B] matrix C1/C2 = np.float64(0.49999999999999983) ; -E2S/E1S = np.float64(0.5000000000000023)
+[B] bounds: step1 eps_substrate(X0)=getEE('J1','X0')=3.103448275862063, eps_product(S)=-2.1034482758620667, sum=0.9999999999999964
+[B] bounds: step2 eps_substrate(S)=1.0517241379310336, eps_product(X1)=getEE('J2','X1')=-0.05172413793103645, sum=0.9999999999999971
+[B] joint scaling step1 ('k1', 'k1r') by (1+0.001): ss_return base=8.881784197001252e-16 pert=6.661338147750939e-16 J0=np.float64(0.9666666666666672) J=np.float64(0.9669886742171889) dlnJ/dln = np.float64(0.33322229007704474)
+[B] joint scaling step2 ('k2', 'k2r') by (1+0.001): ss_return base=8.881784197001252e-16 pert=3.3306690738754696e-16 J0=np.float64(0.9666666666666672) J=np.float64(0.9673108963678776) dlnJ/dln = np.float64(0.666555598743552)
+[B] joint scaling step1 ('k1', 'k1r') by (1+0.0001): ss_return base=8.881784197001252e-16 pert=0.0 J0=np.float64(0.9666666666666672) J=np.float64(0.9666988867408839) dlnJ/dln = np.float64(0.33332222289487157)
+[B] joint scaling step2 ('k2', 'k2r') by (1+0.0001): ss_return base=8.881784197001252e-16 pert=3.3306690738754696e-16 J0=np.float64(0.9666666666666672) J=np.float64(0.9667311089630344) dlnJ/dln = np.float64(0.6666555559799555)
+[B] resetToOrigin() used; values after: {'e1': 1.0, 'k1': 0.3, 'k1r': 0.2, 'e2': 1.0, 'k2': 0.1, 'k2r': 0.05} ; steadyState()=8.881784197001252e-16
+==============================================================================
+PARAMETER DEPENDENCE (fresh te.loada per variant)
+==============================================================================
+[A] base       ss_return=4.440892098500626e-16 dS/dt=np.float64(4.440892098500626e-16) [S]=29.999999999999993 J1=np.float64(3.0) J2=np.float64(2.9999999999999996) E1S=np.float64(0.0) E2S=np.float64(1.0000000000000036) C1=np.float64(1.0) C2=np.float64(0.0) summ=np.float64(0.0) conn=np.float64(0.0)
+[A] k1=0.03    ss_return=0.0 dS/dt=np.float64(0.0) [S]=2.9999999999999996 J1=np.float64(0.3) J2=np.float64(0.3) E1S=np.float64(0.0) E2S=np.float64(1.0000000000000009) C1=np.float64(1.0) C2=np.float64(0.0) summ=np.float64(0.0) conn=np.float64(0.0)
+[A] k1=3       ss_return=7.105427357601002e-14 dS/dt=np.float64(-7.105427357601002e-14) [S]=300.0000000000007 J1=np.float64(30.0) J2=np.float64(30.00000000000007) E1S=np.float64(0.0) E2S=np.float64(0.999999999999996) C1=np.float64(1.0) C2=np.float64(0.0) summ=np.float64(0.0) conn=np.float64(0.0)
+[A] k2=0.01    ss_return=2.220446049250313e-15 dS/dt=np.float64(-2.220446049250313e-15) [S]=300.0000000000002 J1=np.float64(3.0) J2=np.float64(3.000000000000002) E1S=np.float64(0.0) E2S=np.float64(1.0000000000000027) C1=np.float64(1.0) C2=np.float64(0.0) summ=np.float64(0.0) conn=np.float64(0.0)
+[A] k2=1       ss_return=0.0 dS/dt=np.float64(0.0) [S]=3.0 J1=np.float64(3.0) J2=np.float64(3.0) E1S=np.float64(0.0) E2S=np.float64(0.9999999999999983) C1=np.float64(1.0) C2=np.float64(0.0) summ=np.float64(0.0) conn=np.float64(0.0)
+[A] X0=1       ss_return=0.0 dS/dt=np.float64(0.0) [S]=2.9999999999999996 J1=np.float64(0.3) J2=np.float64(0.3) E1S=np.float64(0.0) E2S=np.float64(1.0000000000000009) C1=np.float64(1.0) C2=np.float64(0.0) summ=np.float64(0.0) conn=np.float64(0.0)
+[A] X0=100     ss_return=7.105427357601002e-14 dS/dt=np.float64(-7.105427357601002e-14) [S]=300.0000000000007 J1=np.float64(30.0) J2=np.float64(30.00000000000007) E1S=np.float64(0.0) E2S=np.float64(0.999999999999996) C1=np.float64(1.0) C2=np.float64(0.0) summ=np.float64(0.0) conn=np.float64(0.0)
+[B] base       ss_return=8.881784197001252e-16 dS/dt=np.float64(8.881784197001252e-16) [S]=10.166666666666664 J1=np.float64(0.9666666666666672) J2=np.float64(0.9666666666666663) E1S=np.float64(-2.103448275862058) E2S=np.float64(1.0517241379310338) C1=np.float64(0.33333333333333337) C2=np.float64(0.666666666666667) summ=np.float64(4.440892098500626e-16) conn=np.float64(3.4416913763379853e-15)
+[B] base       forward cond X0*q1*q2=29.999999999999996 > X1=1 ; eq6.6 normalised: 0.33333333333333326, 0.6666666666666666
+[B] k1=0.6     ss_return=4.218847493575595e-15 dS/dt=np.float64(4.218847493575595e-15) [S]=20.16666666666665 J1=np.float64(1.9666666666666694) J2=np.float64(1.9666666666666652) E1S=np.float64(-2.0508474576271003) E2S=np.float64(1.0254237288135561) C1=np.float64(0.33333333333333415) C2=np.float64(0.6666666666666657) summ=np.float64(-1.1102230246251565e-16) conn=np.float64(1.3322676295501878e-15)
+[B] k1=0.6     forward cond X0*q1*q2=59.99999999999999 > X1=1 ; eq6.6 normalised: 0.33333333333333326, 0.6666666666666666
+[B] k1r=0.4    ss_return=1.1102230246251565e-16 dS/dt=np.float64(1.1102230246251565e-16) [S]=6.1 J1=np.float64(0.56) J2=np.float64(0.5599999999999999) E1S=np.float64(-4.357142857142852) E2S=np.float64(1.0892857142857133) C1=np.float64(0.20000000000000073) C2=np.float64(0.7999999999999992) summ=np.float64(-1.1102230246251565e-16) conn=np.float64(-3.885780586188048e-15)
+[B] k1r=0.4    forward cond X0*q1*q2=14.999999999999998 > X1=1 ; eq6.6 normalised: 0.19999999999999996, 0.8
+[B] k2=0.2     ss_return=2.220446049250313e-16 dS/dt=np.float64(2.220446049250313e-16) [S]=7.624999999999999 J1=np.float64(1.475) J2=np.float64(1.4749999999999999) E1S=np.float64(-1.0338983050847443) E2S=np.float64(1.0338983050847446) C1=np.float64(0.5) C2=np.float64(0.5000000000000001) summ=np.float64(0.0) conn=np.float64(2.220446049250313e-16)
+[B] k2=0.2     forward cond X0*q1*q2=59.99999999999999 > X1=1 ; eq6.6 normalised: 0.4999999999999999, 0.5
+[B] k2r=0.1    ss_return=9.992007221626409e-16 dS/dt=np.float64(9.992007221626409e-16) [S]=10.33333333333333 J1=np.float64(0.933333333333334) J2=np.float64(0.933333333333333) E1S=np.float64(-2.2142857142857224) E2S=np.float64(1.1071428571428623) C1=np.float64(0.33333333333333415) C2=np.float64(0.6666666666666661) summ=np.float64(2.220446049250313e-16) conn=np.float64(-1.6653345369377348e-15)
+[B] k2r=0.1    forward cond X0*q1*q2=14.999999999999998 > X1=1 ; eq6.6 normalised: 0.33333333333333326, 0.6666666666666666
+[B] X0=20      ss_return=4.218847493575595e-15 dS/dt=np.float64(4.218847493575595e-15) [S]=20.16666666666665 J1=np.float64(1.9666666666666694) J2=np.float64(1.9666666666666652) E1S=np.float64(-2.0508474576271003) E2S=np.float64(1.0254237288135561) C1=np.float64(0.33333333333333415) C2=np.float64(0.6666666666666657) summ=np.float64(-1.1102230246251565e-16) conn=np.float64(1.3322676295501878e-15)
+[B] X0=20      forward cond X0*q1*q2=59.99999999999999 > X1=1 ; eq6.6 normalised: 0.33333333333333326, 0.6666666666666666
+[B] X1=2       ss_return=9.992007221626409e-16 dS/dt=np.float64(9.992007221626409e-16) [S]=10.33333333333333 J1=np.float64(0.933333333333334) J2=np.float64(0.933333333333333) E1S=np.float64(-2.2142857142857224) E2S=np.float64(1.1071428571428623) C1=np.float64(0.33333333333333415) C2=np.float64(0.6666666666666661) summ=np.float64(2.220446049250313e-16) conn=np.float64(-1.6653345369377348e-15)
+[B] X1=2       forward cond X0*q1*q2=29.999999999999996 > X1=2 ; eq6.6 normalised: 0.33333333333333326, 0.6666666666666666
+==============================================================================
+ERRORS: 0
+output written to /Users/gio/Desktop/research/Research UW/MCA website analyzer (like benchling)/model-scientist-runs/pass-1/output.txt

@@ -25,9 +25,16 @@ export function startLive(key, meta, begin) {
   key = at(key);
   const run = { meta, events: [], subs: new Set(), ended: false, stop: () => {} };
   LIVE.set(key, run);
-  const emit = o => { run.events.push(o); for (const f of [...run.subs]) f(o); };
-  const end = () => { run.ended = true; for (const f of [...run.subs]) f(null); };
-  run.stop = begin(emit, end) ?? run.stop;
+  const emit = o => { if (run.ended) return; run.events.push(o); for (const f of [...run.subs]) f(o); };
+  const end = () => { if (run.ended) return; run.ended = true; for (const f of [...run.subs]) f(null); };
+  try { run.stop = begin(emit, end) ?? run.stop; }
+  catch (e) {
+    end();
+    // A startup failure did not start a turn. Do not leave an immortal live
+    // entry with no stop function for a later reload to follow forever.
+    for (const [k, r] of LIVE) if (r === run) LIVE.delete(k);
+    throw e;
+  }
 }
 
 /** Everything `key`'s turn has emitted so far, then each event as it comes, then

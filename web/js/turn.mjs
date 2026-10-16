@@ -15,6 +15,31 @@ export function isEchoedThought(thoughts, text){
   return buf.slice(recentStart).includes(t.slice(0, 60));
 }
 
+/* A tool chip's label as a step in the "Agent execution" list. Unknown tools keep
+   their own name, so nothing the agent did goes unshown. */
+const STEP = { read: 'Read a file', write: 'Wrote a file', edit: 'Edited a file', multiedit: 'Edited a file',
+  bash: 'Ran a command', python: 'Ran Python with Tellurium', glob: 'Searched for files', grep: 'Searched file contents',
+  read_model: 'Read model.txt', write_model: 'Proposed a model change', simulate: 'Simulated with Tellurium',
+  steady_state: 'Computed the steady state', mca: 'Computed control coefficients', list_skills: 'Listed the skills',
+  read_reference: 'Read a reference', todowrite: 'Updated its plan', websearch: 'Searched the web',
+  webfetch: 'Read a web page', agent: 'Ran a sub-agent', task: 'Ran a sub-agent' };
+export function stepText(label){
+  if(label.startsWith('phase:')) return 'Phase: ' + label.slice(6);
+  if(label.startsWith('workflow: ')) return 'Ran the ' + label.slice(10) + ' workflow';
+  if(label.startsWith('skill: ')) return 'Loaded the ' + label.slice(7) + ' skill';
+  return STEP[label] ?? label;
+}
+
+/* A proposed model change, line by line: what went and what came. A line that only
+   moved is unchanged. */
+export function lineDiff(before, after){
+  const count = s => { const m = new Map(); for(const l of s.split('\n')) if(l.trim()) m.set(l, (m.get(l) ?? 0) + 1); return m; };
+  const a = count(before ?? ''), b = count(after ?? ''), removed = [], added = [];
+  for(const [l, n] of a) for(let i = b.get(l) ?? 0; i < n; i++) removed.push(l);
+  for(const [l, n] of b) for(let i = a.get(l) ?? 0; i < n; i++) added.push(l);
+  return { removed, added };   // ponytail: a multiset diff, not an ordered one; enough to read a change by
+}
+
 /* One chat turn as state. Fed the runtime's events one at a time, it holds what
    send() in chat.mjs then paints; no DOM, so the rules below can be unit-tested.
    `q` is the user's message and `c` the chat: the turn writes c.sessionId and, when
@@ -23,8 +48,11 @@ export function isEchoedThought(thoughts, text){
    Stop is a 'closed' event with `stopped` set: the turn ends there, and whatever the
    runtime still emits afterwards (the hosted agent cannot be interrupted inside a
    tool call) is ignored instead of repainting or logging a turn the user ended. */
+const THOUGHTS_KEPT = 40000;   // ponytail: a long workflow's thinking is trimmed from the front past this
+
 export function newTurn(q, c){
   const t = { body:'', thoughts:'', lastPhase:'', status:null, failed:false, logged:false, stopped:false,
+              started:Date.now(), changes:[],
               seen:new Set(), chips:new Map(), warns:[] };
 
   const addTool = tl => {
@@ -104,7 +132,12 @@ export function newTurn(q, c){
         // A turn stopped before it produced anything, or one that failed outright,
         // is not a real exchange — don't persist a "(no answer)" pair for it.
         if(!t.failed && (t.body || ev.type === 'done')){
-          c.log.push({ q, a: t.body, tools: [...t.seen].filter(x => !x.startsWith('phase:')) });
+          // everything the turn showed, so reopening the project shows it again:
+          // the steps with their counts, the thinking and how long it took, the model edits
+          c.log.push({ q, a: t.body, tools: [...t.seen].filter(x => !x.startsWith('phase:')),
+                       steps: [...t.seen].map(x => [x, t.chips.get(x) ?? 1]),
+                       thoughts: t.thoughts.slice(-THOUGHTS_KEPT), secs: Math.round((Date.now() - t.started) / 1000),
+                       changes: t.changes });
           const acts = [...t.seen].filter(x => !x.startsWith('phase:'));
           c.history.push({ role:'user', content: q });
           c.history.push({ role:'assistant', content: (t.body || '(no answer)') +

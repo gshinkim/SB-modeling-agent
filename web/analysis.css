@@ -61,6 +61,10 @@
 .an-heat th.c,.an-heat td.c{padding-left:10px;padding-right:10px;min-width:64px}
 .an-heat td:first-child,.an-heat th:first-child{padding-right:16px;white-space:nowrap}
 .an-line{font-size:13px;color:var(--ink-2)}
+.an-eig{width:auto}
+.an-eig .decays{color:var(--good-ink)}
+.an-eig .grows{color:var(--crit)}
+.an-eig .zero{color:var(--muted)}
 .an-flux{display:flex;gap:8px 24px;flex-wrap:wrap;font-size:13px}
 
 /* ---------- 03 control ---------- */

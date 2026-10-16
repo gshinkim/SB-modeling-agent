@@ -3,7 +3,7 @@ import { $, esc } from './util.mjs';
 /* The browser cannot hand back a real filesystem path from <input type=file>,
    so this browses the server's filesystem and returns the absolute path. */
 
-let resolveFn = null, cur = null, filter = '', picked = null, dirsOnly = false, built = false;
+let resolveFn = null, cur = null, filter = '', picked = null, dirsOnly = false, built = false, loadSeq = 0;
 
 function ensureDom(){
   // A DOM-presence check here (`if($('#fp')) return`) is a footgun: agent-authored
@@ -31,9 +31,12 @@ function ensureDom(){
   $('#fpClose').onclick = $('#fpCancel').onclick = () => close(null);
   $('#fpOk').onclick = () => close(dirsOnly ? cur?.path : picked);
   $('#fpUp').onclick = () => { if(cur?.parent) load(cur.parent); };
+  $('#scrim').addEventListener('click', () => { if(resolveFn) close(null); });
+  addEventListener('keydown', e => { if(e.key === 'Escape' && resolveFn) close(null); });
 }
 
 function close(v){
+  ++loadSeq;
   $('#fp')?.classList.remove('on');
   $('#scrim').classList.remove('on');
   const f=resolveFn; resolveFn=null; picked=null;
@@ -41,10 +44,15 @@ function close(v){
 }
 
 async function load(path){
+  const seq = ++loadSeq;
+  picked = null; cur = null;
+  $('#fpOk').disabled = true; $('#fpUp').disabled = true;
+  $('#fpSel').textContent = ''; $('#fpList').textContent = 'Loading…';
   const q = new URLSearchParams();
   if(path) q.set('path', path);
   if(filter) q.set('ext', filter);
-  const r = await fetch('/api/fs?'+q).then(r=>r.json());
+  const r = await fetch('/api/fs?'+q).then(r=>r.json()).catch(e => ({ error: e.message || String(e) }));
+  if(seq !== loadSeq || !resolveFn) return;
   if(r.error){ $('#fpList').innerHTML='<p class="hint" style="padding:12px">'+esc(r.error)+'</p>'; return; }
   cur = r; picked = null;
   $('#fpCur').textContent = r.path;
@@ -77,10 +85,12 @@ async function load(path){
 /** pickFile({title, ext, start, dirs}) → absolute path, or null if cancelled. */
 export function pickFile({ title='Choose a file', ext='', start=null, dirs=false } = {}){
   ensureDom();
+  resolveFn?.(null);
+  const result = new Promise(r => { resolveFn = r; });
   filter = ext; dirsOnly = dirs;
   $('#fpTitle').textContent = title;
   $('#fp').classList.add('on');
   $('#scrim').classList.add('on');
   load(start);
-  return new Promise(r => { resolveFn = r; });
+  return result;
 }

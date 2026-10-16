@@ -48,6 +48,7 @@ console.log('working folder wins over project folder ok');
 
 /* 2. Refusals, with the status and wording the route gave when these rules were inline. */
 await refused({ message: ' ' }, 'message is empty');
+await refused({ message: 42 }, 'message is empty');
 await refused({ sessionDirId: 'nope' }, 'no such project: nope');
 await refused({ sessionDirId: '../..' }, 'Project: empty session name');
 await refused({ scratchDir: join(work, 'gone') }, 'Working folder: no such folder: ' + join(work, 'gone') +
@@ -58,6 +59,18 @@ await refused({ runtime: 'openai', chatCfg: {} }, /^No server URL for this model
 // the project is checked first, even when a working folder would have been used
 await refused({ sessionDirId: '../..', scratchDir: join(work, 'gone') }, 'Project: empty session name');
 console.log('refusals ok');
+
+{
+  let ejected = 0, held = 0;
+  const ctx = { root: work, work, te: null, editorEcho: () => false,
+    eject: async () => { ejected++; }, summarise: {},
+    awake: () => { held++; return { kill: () => held-- }; }, run: () => { throw new Error('start failed'); } };
+  await assert.rejects(startTurn({ message: 'ask', runtime: 'openai',
+    chatCfg: { baseUrl: 'http://127.0.0.1:1', model: 'stub' }, scratchDir: 'relative' }, ctx), { status: 400 });
+  assert.equal(ejected, 0, 'a refused request must not unload the current model');
+  await assert.rejects(startTurn({ message: 'ask' }, ctx), /start failed/);
+  assert.equal(held, 0, 'synchronous startup failure releases the sleep inhibitor');
+}
 
 /* 3. Attachments land in the scratch folder; history is told the path, the agent the contents. */
 r = await start({});

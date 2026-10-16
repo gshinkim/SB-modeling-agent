@@ -3,8 +3,8 @@
    matrices into rows, bars, cells, CSV and Markdown. No DOM, no backend. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { logFactors, factorLabel, heatCell, matrixRows, fccRows, fccSentence, buildCSV, buildReport,
-         scanGeometry, stepStatus, steadyRows, stabilityWord, whyNot, whySteady, zeroFlux, RANGE, EXAMPLE,
+import { eigShort, logFactors, factorLabel, heatCell, matrixRows, fccRows, fccSentence, buildCSV, buildReport,
+         scanGeometry, stepStatus, steadyRows, stabilityWord, eigenRows, whyNot, whySteady, zeroFlux, RANGE, EXAMPLE,
          runState, describeRun } from './analysis.mjs';
 
 // `sums` come with the matrix from te_worker; the page never adds the numbers up itself
@@ -56,6 +56,20 @@ test('fccRows: width by |value|, largest magnitude is top, negatives flagged', (
   assert.match(fccSentence(fccRows({ rows: ['J'], cols: ['a'], data: [[0]] }, 'J'), 'J'), /^No step/);
 });
 
+test('undefined scaled coefficients and summation values stay missing', () => {
+  const missing = { rows: ['J'], cols: ['v1', 'v2'], data: [[null, null]], sums: [null] };
+  assert.equal(matrixRows(missing)[0].sum, null);
+  const rows = fccRows(missing, 'J');
+  assert.ok(rows.every(row => row.value === null && row.width === 0 && !row.top && !row.neg));
+  assert.deepEqual(heatCell(rows[0].value), { label: 'n/a', bg: 'transparent' });
+  const report = buildReport({ info, ss: { error: 'not available' }, mca: { data: {
+    fluxControl: missing, concentrationControl: { ...missing, rows: ['S1'] },
+    elasticities: { rows: [], cols: [], data: [] },
+  } }, flux: 'J', scan: { state: 'idle', pts: [] } });
+  assert.match(report, /\| J \| n\/a \| n\/a \| n\/a \|/);
+  assert.match(report, /\| S1 \| n\/a \| n\/a \| n\/a \|/);
+});
+
 test('buildCSV: three titled blocks, full precision, quoting', () => {
   const csv = buildCSV({ fluxControl: FC, concentrationControl: CC, elasticities: EE });
   const blocks = csv.trimEnd().split('\n\n');
@@ -97,6 +111,19 @@ test('buildReport: every section, and failures read as text rather than vanish',
     mca: { data: { fluxControl: { ...FC, rows: ['v1', 'v2'] }, concentrationControl: CC, elasticities: EE } }, flux: 'v1', scan: { state: 'idle', pts: [] } });
   assert.ok(eq.includes('flux through v1 is zero') && !eq.includes('has the largest'));
   assert.equal(buildReport(null), '');
+  const withEig = buildReport({ info, ss: { data: { ...ss.data, stability: { ...ss.data.stability, eigenvalues: [[-0.5, 0], [-2, 1]] } } },
+    mca: { error: 'x' }, flux: 'v1', scan: { state: 'idle', pts: [] } });
+  assert.ok(withEig.includes('| -0.5 | -0.5 | 0 | decays (stable) |'), withEig);
+  assert.ok(withEig.includes('| -2 + 1i | -2 | 1 | decays (stable) |'));
+  assert.ok(!md.includes('Jacobian eigenvalues'));          // no eigenvalues, no empty table
+});
+
+test('eigenRows: a + bi, sorted by real part, sign classified', () => {
+  const r = eigenRows({ eigenvalues: [[-1, 2], [0.3, -0.5], [1e-12, 0], [-2, 0], [null, 0]] });
+  assert.deepEqual(r.map(e => e.label), ['0.3 - 0.5i', '0', '-1 + 2i', '-2']);
+  assert.deepEqual(r.map(e => e.kind), ['grows', 'zero', 'decays', 'decays']);
+  assert.deepEqual(eigenRows(undefined), []);
+  assert.deepEqual(eigenRows({ error: 'x' }), []);
 });
 
 test('scanGeometry: log x axis, y spans zero and the data, baseline at 1x', () => {
@@ -135,7 +162,7 @@ test('steadyRows, stabilityWord, whyNot', () => {
   assert.match(whyNot({ ...info, floatingSpecies: [] }, 'boom'), /no floating species.*Tellurium reported: boom$/);
   assert.match(whyNot(info, 'boom\nmore'), /could not reach one.*boom$/);
   assert.equal(whySteady(info, 'boom\nmore'), 'boom');
-  assert.match(whySteady({ ...info, floatingSpecies: [], reactions: [] }, null), /no floating species.*Time course tab shows how they evolve\.$/);
+  assert.match(whySteady({ ...info, floatingSpecies: [], reactions: [] }, null), /no floating species.*time course on the Model tab shows how they evolve\.$/);
   assert.ok(zeroFlux(-4e-17) && zeroFlux(0) && !zeroFlux(0.02) && !zeroFlux(null));
 });
 
@@ -302,4 +329,10 @@ test('describeRun: one caption and status per kind of run', () => {
     if(want[0]) assert.equal(d.summary, want[0], name);
     assert.deepEqual([d.caption, d.kind, d.status], want.slice(1), name);
   }
+});
+
+test('eigShort', () => {
+  assert.equal(eigShort({ eigenvalues: [[-0.5, 0], [-0.2, 0]] }), ' · λ = -0.2, -0.5');
+  assert.match(eigShort({ eigenvalues: [[-1, 0], [-2, 0], [-3, 0]] }, 2), /\(\+1 more\)$/);
+  assert.equal(eigShort(undefined), '');
 });

@@ -2,7 +2,8 @@
    No DOM: pins the replay-cap decision loadChats uses to bound how many turns
    of a restored session get rendered (the DOM-touching part can't run here). */
 import assert from 'node:assert/strict';
-import { replaySlice, REPLAY_CAP, chatSnapshot } from './chat.mjs';
+import { replaySlice, REPLAY_CAP, chatSnapshot, loadChats, openChat, initChat } from './chat.mjs';
+import { where } from './shell.mjs';
 import { isEchoedThought } from './turn.mjs';
 
 const turn = n => ({ q: 'q'+n, a: 'a'+n });
@@ -108,3 +109,35 @@ const turn = n => ({ q: 'q'+n, a: 'a'+n });
 }
 
 console.log('chat replay-cap ok');
+
+{
+  const originals = { document: globalThis.document, addEventListener: globalThis.addEventListener };
+  const nodes = new Map();
+  const makeNode = () => ({ children: [], value: '', textContent: '', hidden: false,
+    style: { setProperty() {} }, classList: { toggle() {}, contains() { return false; } },
+    append(...children) { this.children.push(...children); }, prepend() {}, remove() {},
+    setAttribute() {}, addEventListener() {}, focus() {} });
+  const node = selector => { if(!nodes.has(selector)) nodes.set(selector, makeNode()); return nodes.get(selector); };
+  globalThis.document = { querySelector: node, querySelectorAll: () => [], createElement: makeNode };
+  globalThis.addEventListener = () => {};
+  try {
+    loadChats([{ id: 41, title: 'older', history: [], log: [] }, { id: 42, title: 'newer', history: [], log: [] }]);
+    assert.equal(node('#chatPick').value, 42);
+    assert.equal(openChat('41'), true);
+    assert.equal(node('#chatPick').value, 41, 'a search hit selects the matching chat');
+    assert.deepEqual(where(), { nav: 'workspace', tab: 'model', side: 'chat' });
+    assert.equal(node('#msgs').children[0].hidden, false);
+    assert.equal(node('#msgs').children[1].hidden, true);
+    assert.equal(openChat(999), false);
+
+    initChat();
+    node('#attachInput').onchange({ target: { files: [{ name: 'photo" onfocus="alert(1).png', size: 10 }], value: 'x' } });
+    assert.match(node('#attList').innerHTML, /aria-label="Remove photo&quot; onfocus=&quot;alert\(1\)\.png"/,
+      'an attachment filename cannot escape its quoted aria-label');
+  } finally {
+    for(const [name, value] of Object.entries(originals)){
+      if(value === undefined) delete globalThis[name]; else globalThis[name] = value;
+    }
+  }
+}
+console.log('chat search navigation and attachment escaping ok');

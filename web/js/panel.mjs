@@ -9,6 +9,25 @@ export const setOnChange = fn => { onChange = fn; };
 
 const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// Preserve offsets while hiding comments: a semicolon inside a comment must
+// never become a statement boundary for a slider's textual rewrite.
+const withoutComments = src => src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*/g,
+  comment => comment.replace(/[^\n]/g, ' '));
+
+function modelEnd(src){
+  const tokens = /(?:^|;)[ \t]*(?:(model)[ \t]+(\*)?[^\n;]*|(function)\b[^\n;]*|(end)\b)/gm;
+  const stack = [], models = [];
+  let m;
+  while((m = tokens.exec(src))){
+    if(m[1] || m[3]) stack.push({ model: !!m[1], main: !!m[2] });
+    else if(m[4]){
+      const block = stack.pop();
+      if(block?.model) models.push({ main: block.main, at: m.index + m[0].lastIndexOf('end') });
+    }
+  }
+  return (models.find(m => m.main) ?? models.at(-1))?.at;
+}
+
 /* Rewrites `name = <lone number>` in place, and only that shape: a whole
    statement (right after the start of the source or a `;`), whose right-hand
    side is nothing but a number, not inside a comment. An expression
@@ -16,11 +35,17 @@ const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
    of corrupted, and a name is regex-escaped before use since Antimony ids can
    contain regex metacharacters (`J.1`). */
 export function writeOnly(editor, name, v){
-  const n = reEsc(name), t = editor.value;
-  const re = new RegExp('((?:^|;)[ \\t]*(?:(?:const|var|species|compartment|parameter|formula)[ \\t]+)*\\$?' + n + '[ \\t]*=[ \\t]*)(-?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)(?=[ \\t]*(?:;|//|#|$))', 'm');
-  if (re.test(t)) editor.value = t.replace(re, (m, a) => a + numText(v));
-  else if (!new RegExp('(?:^|;)[ \\t]*(?:(?:const|var|species|compartment|parameter|formula)[ \\t]+)*\\$?' + n + '[ \\t]*:?=', 'm').test(t))
-    editor.value = t.replace(/\s*$/, '') + '\n' + name + ' = ' + numText(v);
+  const n = reEsc(name), t = editor.value, code = withoutComments(t);
+  const re = new RegExp('((?:^|;)[ \\t]*(?:(?:const|var|species|compartment|parameter|formula)[ \\t]+)*\\$?' + n + '[ \\t]*=[ \\t]*)([-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)(?=[ \\t]*(?:;|$))', 'm');
+  const match = re.exec(code);
+  if (match){
+    const at = match.index + match[1].length;
+    editor.value = t.slice(0, at) + numText(v) + t.slice(at + match[2].length);
+  } else if (!new RegExp('(?:^|;)[ \\t]*(?:(?:const|var|species|compartment|parameter|formula)[ \\t]+)*\\$?' + n + '[ \\t]*:?=', 'm').test(code)){
+    const at = modelEnd(code), assignment = name + ' = ' + numText(v);
+    editor.value = at === undefined ? t.replace(/\s*$/, '') + '\n' + assignment
+      : t.slice(0, at) + assignment + ';\n' + t.slice(at);
+  }
 }
 
 function makeSlider(editor, key, name, value){
@@ -28,7 +53,7 @@ function makeSlider(editor, key, name, value){
   const hi=Math.max(Math.abs(value)*2, 1);
   wrap.innerHTML =
     '<div class="top"><span class="nm"></span><input type="number" step="any"></div>'+
-    '<input type="range" min="0" max="'+hi+'" step="'+(hi/200)+'">';
+    '<input type="range" min="'+(value < 0 ? -hi : 0)+'" max="'+hi+'" step="'+(hi/200)+'">';
   wrap.querySelector('.nm').textContent = name;
   const num=wrap.querySelector('input[type=number]'), rng=wrap.querySelector('input[type=range]');
   num.value=numText(value); rng.value=value;
@@ -36,7 +61,7 @@ function makeSlider(editor, key, name, value){
   const push = v => { writeOnly(editor, name, v); onChange(); };
   rng.oninput = ()=>{ num.value=numText(rng.value); push(+rng.value); };
   num.oninput = ()=>{ const v=+num.value; if(num.value===''||!isFinite(v)) return;
-                      if(v>+rng.max) rng.max=v*1.5; rng.value=v; push(v); };
+                      if(v>+rng.max) rng.max=v*1.5; if(v<+rng.min) rng.min=v*1.5; rng.value=v; push(v); };
   ctl[key]={rng,num};
   return wrap;
 }
@@ -71,6 +96,7 @@ function syncControls(vals){
     if(v===undefined || !isFinite(v)) continue;
     if(document.activeElement===rng || document.activeElement===num) continue;  // don't fight the user
     if(v > +rng.max) rng.max = Math.abs(v)*1.5;
+    if(v < +rng.min) rng.min = v*1.5;
     rng.value=v; num.value=numText(v);
   }
 }

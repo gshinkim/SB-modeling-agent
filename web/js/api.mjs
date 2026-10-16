@@ -26,6 +26,8 @@ export const settle   = q => post('/api/settle', q);
 export const mca      = q => post('/api/mca', q);
 // SBML → Antimony (Antimony passes through): the editor only ever holds Antimony
 export const convert  = src => post('/api/convert', { src });
+// a ```latex block in an answer, compiled by Tectonic: {ok, pdf (base64)} or {ok:false, error}
+export const latex    = src => post('/api/latex', { src });
 
 /** One agent turn, streamed as server-sent events. Returns an abort function.
     Forwards the whole options object as-is — no per-field allowlist to fall out of
@@ -52,6 +54,7 @@ function stream(url, init, onEvent){
       // like any other abort, so the UI unbusies and doesn't log a fake exchange.
       if(e.name==='AbortError'){ onEvent({type:'closed'}); return; }
       onEvent({type:'fatal', error:String(e.message||e)});
+      onEvent({type:'done', code:1});
       return;
     }
     if(res.status === 204) return onEvent({type:'none'});
@@ -65,21 +68,25 @@ function stream(url, init, onEvent){
     }
     const rd = res.body.getReader(), dec = new TextDecoder();
     let buf='';
+    const frame = value => {
+      for(const line of value.split('\n')){
+        if(!line.startsWith('data:')) continue;
+        try{ onEvent(JSON.parse(line.slice(5).trim())); }catch{}
+      }
+    };
     for(;;){
       let chunk;
       try{ chunk = await rd.read(); }
       catch(e){ if(e.name!=='AbortError') onEvent({type:'fatal', error:String(e.message||e)}); break; }
-      if(chunk.done) break;
-      buf += dec.decode(chunk.value, {stream:true});
+      if(chunk.done){ buf += dec.decode(); break; }
+      buf = (buf + dec.decode(chunk.value, {stream:true})).replace(/\r\n/g, '\n');
       let i;
       while((i = buf.indexOf('\n\n')) >= 0){
-        const frame = buf.slice(0,i); buf = buf.slice(i+2);
-        for(const line of frame.split('\n')){
-          if(!line.startsWith('data:')) continue;
-          try{ onEvent(JSON.parse(line.slice(5).trim())); }catch{}
-        }
+        const value = buf.slice(0,i); buf = buf.slice(i+2);
+        frame(value);
       }
     }
+    if(buf.trim()) frame(buf);            // the last event need not have a trailing separator
     onEvent({type:'closed'});
   })();
   return () => ctrl.abort();

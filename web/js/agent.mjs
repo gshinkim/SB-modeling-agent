@@ -45,22 +45,34 @@ const EXEC_NOTE =
   'or save: report the numbers those tools return. If the plan needs something they ' +
   'cannot do, say so in "error" instead of approximating it.';
 
-function tools(getModel, setModel, emit){
+export function makeBrowserTools(getModel, setModel, emit){
+  const loaded = new Set(), references = new Set();
   const impl = {
     list_skills: async () => (await text('/skills/index.json')).toString(),
     load_skill: async ({ name }) => {
+      if(!['mca', 'tellurium', 'pathway-modeling'].includes(name)) throw new Error('unknown Skill: ' + name);
       const md = await text('/skills/' + name + '/SKILL.md');
+      if(!md.trim()) throw new Error('the Skill is empty: ' + name);
+      loaded.add(name);
       return md + '\n\n(The text above is only the index. Before you answer, read_reference every file it lists that ' +
         'covers the question. There is no limit on how many you read; a question means a file to open. Once ' +
         'what you have read answers the question, stop reading and answer.)';
     },
     read_reference: async ({ path }) => {
-      if (!/^skills\/[\w.\-\/]+\.md$/.test(path)) throw new Error('only skills/**.md may be read');
-      return text('/' + path);
+      if (!/^skills\/[\w.\-\/]+\.md$/.test(path) || path.split('/').some(part => part === '.' || part === '..'))
+        throw new Error('only skills/**.md may be read');
+      const md = await text('/' + path);
+      if(!md.trim()) throw new Error('the reference is empty: ' + path);
+      if(path.startsWith('skills/pathway-modeling/references/')) references.add(path);
+      return md;
     },
     read_model: async () => getModel(),
     write_model: async ({ antimony }) => {
       if (!antimony?.trim()) throw new Error('antimony is empty');
+      if(!loaded.has('pathway-modeling') || !references.size) return 'REFUSED - building or changing the model needs ' +
+        'the pathway-modeling Skill, used, not just loaded. Call load_skill("pathway-modeling"), then open the ' +
+        'reference files that cover this change with read_reference("skills/pathway-modeling/references/..."). ' +
+        'SKILL.md alone does not count. Then call write_model again.';
       // Gate on load, not on integrating a time course: a valid stiff or
       // currently-singular draft must be saveable here exactly as it is locally
       // (backend/local-agent.mjs write_file uses the same te.call('info') gate).
@@ -130,7 +142,7 @@ export function runBrowserAgent({ cfg, prompt, history = [], getModel, setModel,
 
   (async () => {
     try {
-      const tk = tools(getModel, setModel, emit);
+      const tk = makeBrowserTools(getModel, setModel, emit);
       const cap = resultCap(cfg?.contextTokens, cfg?.resultPct);
       const STEPS = stepBudget(cfg?.steps);
       const sys = { liveModel: await getModel(), howToRun: HOW_TO_RUN };

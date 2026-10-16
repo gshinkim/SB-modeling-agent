@@ -14,6 +14,13 @@ CACHE = {}          # antimony source -> loaded model (reloading is the slow par
 MAX_STEPS = 500000          # CVODE's 20k default gives up on ordinary stiff models
 
 
+def number(q, key, default, positive=False):
+    value = float(q.get(key, default))
+    if not math.isfinite(value) or (positive and value <= 0):
+        raise ValueError("%s must be a finite%s number" % (key, " positive" if positive else ""))
+    return value
+
+
 def clean(o):
     """Replace non-finite floats with null so json.dumps(allow_nan=False) never raises
     and the reply line stays valid JSON for Node to parse."""
@@ -129,9 +136,18 @@ def do_simulate(q):
     r = load(q["model"])
     over = q.get("overrides")
     apply_overrides(r, over)
-    start = float(q.get("start", 0)); end = float(q.get("end", 100))
+    start = number(q, "start", 0); end = number(q, "end", 100)
+    if end <= start:
+        raise ValueError("end must be greater than start")
     points = max(2, min(20000, int(q.get("points", 50))))
-    names, cols, note = simulate_safe(r, over, start, end, points, q.get("selections"))
+    selections = q.get("selections")
+    if selections is not None:
+        if not isinstance(selections, list) or not all(isinstance(s, str) for s in selections):
+            raise ValueError("selections must be an array of selection names")
+        # The response always exposes t separately; the first requested species
+        # must never be silently used as its time axis.
+        selections = ["time"] + [s for s in selections if s != "time"]
+    names, cols, note = simulate_safe(r, over, start, end, points, selections)
     return {"t": cols[0], "names": names[1:], "cols": cols[1:],
             "note": note, "truncated": note is not None, **info(r)}
 
@@ -143,6 +159,10 @@ def _stability(r):
         vals = [complex(v) for v in r.getFullEigenValues()]
     except Exception as e:
         return {"error": str(e)[:200]}
+    if not vals:
+        return {"eigenvalues": [], "error": "model has no dynamic eigenvalues"}
+    if any(not math.isfinite(v.real) or not math.isfinite(v.imag) for v in vals):
+        return {"error": "Jacobian eigenvalues are not finite"}
     hi = max(v.real for v in vals)
     # A conserved quantity gives an eigenvalue of exactly zero. That is marginal,
     # not unstable - calling it unstable made a plain A -> B look divergent.
@@ -157,13 +177,20 @@ def _stability(r):
 
 
 def _settle_index(cols, ss, tol):
-    """First sample where every species is within tol (relative) of the steady state."""
+    """First sample after which every species stays within relative tolerance.
+
+    A transient or oscillation can cross the tolerance band and leave it again;
+    that is not convergence. Require at least two samples in the final band.
+    """
     n = len(cols[0])
     scale = [max(abs(v), 1e-9) for v in ss]
-    for i in range(n):
+    first = None
+    for i in range(n - 1, -1, -1):
         if all(abs(cols[j][i] - ss[j]) / scale[j] <= tol for j in range(len(ss))):
-            return i
-    return None
+            first = i
+        else:
+            break
+    return first if first is not None and first < n - 1 else None
 
 
 def do_settle(q):
@@ -175,9 +202,10 @@ def do_settle(q):
     r = load(q["model"])
     over = q.get("overrides")
     apply_overrides(r, over)
-    tol = float(q.get("tol", 1e-4))
+    tol = number(q, "tol", 1e-4, positive=True)
     points = max(2, min(20000, int(q.get("points", 200))))
-    max_time = float(q.get("maxTime", 1e6))
+    max_time = number(q, "maxTime", 1e6, positive=True)
+    budget = number(q, "budgetSeconds", 20, positive=True)
     names = list(r.getFloatingSpeciesIds())
     if not names:
         raise ValueError("model has no floating species to settle")
@@ -190,12 +218,12 @@ def do_settle(q):
     ss_map = dict(zip(names, ss))
     fluxes = dict(zip(r.getReactionIds(), [float(v) for v in r.getReactionRates()]))
     stability = _stability(r)          # must be read at the fixed point, before any reset
-    if distance > 1e-4:
+    if not math.isfinite(distance) or distance > 1e-4:
         raise ValueError(
             "steady-state solver did not converge (residual %.3g); the model may "
             "oscillate or be unstable" % distance)
 
-    requested_end = float(q.get("end", 100)) or 100.0
+    requested_end = min(number(q, "end", 100, positive=True), max_time)
 
     # An unstable fixed point is never reached by integrating, however far you go -
     # that is what used to run the horizon out to 1e6 and kill CVODE. Say so, and
@@ -203,24 +231,26 @@ def do_settle(q):
     if stability.get("stable") is False:   # genuinely unstable, not merely marginal
         r.resetToOrigin()
         apply_overrides(r, over)
-        out_names, cols, _ = simulate_safe(r, over, 0, requested_end, points)
+        out_names, cols, integration_note = simulate_safe(r, over, 0, requested_end, points)
         return {
             "t": cols[0], "names": out_names[1:], "cols": cols[1:],
             "settled": False, "unstable": True, "settleTime": None,
             "horizon": requested_end, "tolerance": tol,
             "steadyStateDistance": distance, "steadyState": ss_map,
             "fluxes": fluxes, "stability": stability,
+            "truncated": integration_note is not None,
             "note": ("the steady state exists but is unstable (max Re(lambda) = %.4g%s); "
                      "the trajectory does not converge to it"
                      % (stability["maxRealPart"],
-                        ", complex pair -> oscillatory" if stability["oscillatory"] else "")),
+                        ", complex pair -> oscillatory" if stability["oscillatory"] else ""))
+                    + ("; " + integration_note if integration_note else ""),
             **info(r),
         }
 
     # stable: widen the horizon until the trajectory actually reaches the fixed point
     end = requested_end
     settled_at, probe = None, None
-    deadline = time.monotonic() + float(q.get("budgetSeconds", 20))
+    deadline = time.monotonic() + budget
     for _ in range(40):
         r.resetToOrigin()
         apply_overrides(r, over)
@@ -238,17 +268,22 @@ def do_settle(q):
             break
         if end >= max_time or time.monotonic() > deadline:
             break
-        end *= 2
+        end = min(end * 2, max_time)
 
     # final curve: the approach, with a little room past the settling point
-    horizon = (settled_at * 1.15) if settled_at and settled_at > 0 else end
+    horizon = min((settled_at * 1.15) if settled_at and settled_at > 0 else end, max_time)
     r.resetToOrigin()
     apply_overrides(r, over)
     names_out, cols, note = simulate_safe(r, over, 0, horizon, points)
+    # Do not claim convergence if the returned trajectory never reaches it.
+    settled = settled_at is not None and cols[0][-1] >= settled_at and all(
+        abs(col[-1] - target) / max(abs(target), 1e-9) <= tol
+        for col, target in zip(cols[1:], ss))
     return {
         "t": cols[0], "names": names_out[1:], "cols": cols[1:], "note": note,
-        "settled": settled_at is not None,
-        "settleTime": settled_at,
+        "truncated": note is not None,
+        "settled": settled,
+        "settleTime": settled_at if settled else None,
         "horizon": horizon,
         "tolerance": tol,
         "steadyStateDistance": distance,
@@ -284,21 +319,32 @@ def do_mca(q):
     apply_overrides(r, q.get("overrides"))
     r.conservedMoietyAnalysis = True
     dist = float(r.steadyState())
-    if dist > 1e-4:
+    if not math.isfinite(dist) or dist > 1e-4:
         raise ValueError(
             "steady-state solver did not converge (residual %.3g); control "
             "coefficients are only defined at a steady state" % dist)
 
-    def mat(m):
+    fluxes = dict(zip(r.getReactionIds(), [float(v) for v in r.getReactionRates()]))
+    concentrations = dict(zip(r.getFloatingSpeciesIds(),
+                              [float(v) for v in r.getFloatingSpeciesConcentrations()]))
+
+    def mat(m, reference):
         data = [[float(v) for v in row] for row in m]
+        for i, name in enumerate(m.rownames):
+            # RoadRunner returns a zero FCC row at zero flux in some versions;
+            # J is the scaling denominator, so those numbers are undefined.
+            if reference.get(name.strip("[]")) == 0:
+                data[i] = [float("nan")] * len(data[i])
         # row sums of Tellurium's own numbers (the summation theorems), so the page adds nothing itself
         return {"rows": list(m.rownames), "cols": list(m.colnames), "data": data,
-                "sums": [sum(v for v in row if math.isfinite(v)) for row in data]}
+                # Undefined scaled coefficients invalidate the theorem check.
+                # Dropping NaNs turned an all-undefined row into a convincing 0.
+                "sums": [sum(row) if all(math.isfinite(v) for v in row) else None for row in data]}
 
     out = {"steadyStateDistance": dist,
-           "fluxControl": mat(r.getScaledFluxControlCoefficientMatrix()),
-           "concentrationControl": mat(r.getScaledConcentrationControlCoefficientMatrix()),
-           "elasticities": mat(r.getScaledElasticityMatrix()),
+           "fluxControl": mat(r.getScaledFluxControlCoefficientMatrix(), fluxes),
+           "concentrationControl": mat(r.getScaledConcentrationControlCoefficientMatrix(), concentrations),
+           "elasticities": mat(r.getScaledElasticityMatrix(), fluxes),
            **info(r)}
     # summation theorem residual — the cheapest evidence that the result is trustworthy
     fc = out["fluxControl"]
@@ -330,6 +376,8 @@ def main():
             continue
         try:
             q = json.loads(line)
+            if not isinstance(q, dict):
+                raise ValueError("request must be a JSON object")
         except Exception as e:
             print(json.dumps({"ok": False, "error": "bad request: %s" % e}), flush=True)
             continue

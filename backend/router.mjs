@@ -78,11 +78,18 @@ export function decide(p, loaded = [], cfg = {}) {
   return { auto, hint };
 }
 
-/** Never throws: any failure is { auto: [], hint: [], error }. */
+/* Building or changing a model needs pathway-modeling: the model gates (model-gate.mjs
+   for the CLI, local-agent.mjs modelGate) refuse the write without it. So a request
+   that asks for one routes it at full confidence, whatever the provider scored -
+   measured: the provider routed tellurium and mca for "build a model" and not it. */
+export const MODEL_ASK = /\b(build|write|create|make|add|change|modify|edit|extend|remove|replace|set up)\b[^.?!\n]*\b(models?|reactions?|rate laws?|kinetics|feedback|enzymes?|species|moiet(y|ies)|steps?)\b/i;
+
+/** Never throws: any failure is { auto: [], hint: [], error } (plus a forced pathway-modeling). */
 export async function route({ cfg, root, request, loaded = [], recent = [], hasModel = false,
                               step = 0, fetch: f, timeout = TIMEOUT_MS, laya: lf = laya }) {
   const t0 = Date.now(), none = { auto: [], hint: [] };
   if (!active(cfg)) return { ...none, ms: 0 };
+  const force = MODEL_ASK.test(String(request ?? '')) ? { 'pathway-modeling': 1 } : {};
   try {
     const ask = Object.fromEntries(Object.entries(await questions(root))
       .filter(([k]) => !loaded.includes(k)));
@@ -91,9 +98,9 @@ export async function route({ cfg, root, request, loaded = [], recent = [], hasM
                     recent: recent.slice(-6), model: hasModel ? 'has model' : 'empty', step };
     const p = cfg.provider === 'laya' ? await lf({ root, state, questions: ask })
       : await jev({ key: cfg.key, questions: ask, fetch: f, signal: AbortSignal.timeout(timeout), state });
-    return { ...decide(p, loaded, cfg), ms: Date.now() - t0 };
+    return { ...decide({ ...p, ...force }, loaded, cfg), ms: Date.now() - t0 };
   } catch (e) {
-    return { ...none, ms: Date.now() - t0,
+    return { ...decide(force, loaded, cfg), ms: Date.now() - t0,
              error: e?.name === 'TimeoutError' ? 'Jev timed out' : String(e?.message || e) };
   }
 }

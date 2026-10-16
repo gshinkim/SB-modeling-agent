@@ -684,6 +684,20 @@ const WRITES = ['write_file', 'run_python', 'write_model', 'run_mca_workflow'];
    labelled, so the user knows nothing behind the number was checked. */
 const COMPUTES = new Set(['run_python', 'simulate', 'steady_state', 'mca', 'run_mca_workflow']);
 
+function computedResult(name, out){
+  if(!COMPUTES.has(name)) return false;
+  const text = String(out ?? '').trim();
+  if(!text || /^(?:ERROR:|REJECTED\b|REFUSED\b)/i.test(text) || /\[failed\]/i.test(text)) return false;
+  let data;
+  try { data = JSON.parse(text); } catch {}
+  if(data && typeof data === 'object' && (data.error || data.ok === false || data.success === false)) return false;
+  // A workflow can stop at framing or return UNVALIDATED after execution failed.
+  // Merely invoking it gives no evidence for the final answer's numbers.
+  if(name === 'run_mca_workflow') return data?.status === 'VALIDATED' &&
+    data.validation?.verdict === 'pass' && data.execution?.ran === true && hasNumber(data.execution.results);
+  return hasNumber(text);
+}
+
 /* The loop itself: one copy for a stage and for the outer turn, on the server and in
    the page. A runtime supplies what differs — its tools, its completion call, and
    `hook`: before(step) ahead of each completion, gate(name, args, run) to refuse a
@@ -694,6 +708,7 @@ async function toolLoop({ complete, messages, tools, emit, signal, maxSteps, ms 
                           cap = resultCap(), onStream = emit, hook = {} }) {
   const run = toolRunner(tools.impl, WRITES), lacks = missingArgs(tools.defs);
   const used = new Set(), t0 = Date.now();
+  let computed = false;
   for (let step = 0; step < maxSteps; step++) {
     if (signal?.aborted) break;
     await hook.before?.(step);
@@ -709,7 +724,7 @@ async function toolLoop({ complete, messages, tools, emit, signal, maxSteps, ms 
     const m = await complete({ messages, tools: wrapUp ? undefined : tools.defs, signal, onStream });
     messages.push(forHistory(m));
     const calls = m.tool_calls ?? [];
-    if (!calls.length) return { text: m.content ?? '', used };
+    if (!calls.length) return { text: m.content ?? '', used, computed };
     for (const c of calls) {
       if (signal?.aborted) break;   // Stop: the call already in flight finishes, the rest (a write_model, say) never start
       const name = c.function?.name;
@@ -718,20 +733,20 @@ async function toolLoop({ complete, messages, tools, emit, signal, maxSteps, ms 
       emit({ type: 'tools', tools: [name === 'run_mca_workflow'
         ? { name: 'Workflow', input: { workflow: 'mca-tellurium' } } : { name, input: args }] });
       used.add(name);
-      const out = lacks(name, args) ?? await hook.gate?.(name, args, run) ?? await run(name, args);
+      const denied = lacks(name, args) ?? await hook.gate?.(name, args, run);
+      const out = denied ?? await run(name, args);
+      if(denied == null && run.repeats === 0 && name in tools.impl && computedResult(name, out)) computed = true;
       messages.push(toolResult(c, name, String(out).slice(0, cap)));
       hook.ran?.(name, args, out);
     }
   }
-  return { used };
+  return { used, computed };
 }
 
 /** The outer turn: thinking and tokens both stream. Resolves to its `result` event. */
 export async function runTurn(o) {
-  const { text, used } = await toolLoop(o);
+  const { text, used, computed } = await toolLoop(o);
   const final = stripToolSyntax(text);
-  // a tool the model made up computed nothing
-  const computed = [...used].some(n => COMPUTES.has(n) && n in o.tools.impl);
   return { type: 'result', text: final || NO_ANSWER, isError: !final, noTools: !used.size,
            unverified: !computed && hasNumber(final) };
 }
@@ -771,7 +786,9 @@ export const withWorkflow = (tools, { prompt, emit, cap, run }) => ({ ...tools,
     emit({ type: 'workflow_start' });
     const out = await run({ question, needsNumbers });
     emit({ type: 'workflow_done' });
-    return JSON.stringify(out).slice(0, cap);
+    // toolLoop caps what is sent back to the model after inspecting success.
+    // Truncating here destroys the JSON status needed to verify a computation.
+    return JSON.stringify(out);
   } },
   defs: [...tools.defs, { type: 'function', function: {
     name: 'run_mca_workflow',

@@ -5,7 +5,7 @@ import { listSessions } from './session.mjs';
    search field where the path row was. Reusing .fp means no second modal to keep
    in visual sync with the first. */
 
-let resolveFn = null, rows = [], picked = null, mode = 'open', marked = new Set(), built = false;
+let resolveFn = null, rows = [], picked = null, mode = 'open', marked = new Set(), built = false, loadSeq = 0;
 
 /** Name or id, case-insensitively. Exported so it can be tested without a DOM. */
 export const matches = (s, q) => {
@@ -40,9 +40,12 @@ function ensureDom(){
   $('#spClose').onclick = $('#spCancel').onclick = () => close(null);
   $('#spOk').onclick = () => close(mode === 'delete' ? [...marked] : picked);
   $('#spQ').oninput = render;
+  $('#scrim').addEventListener('click', () => { if(resolveFn) close(null); });
+  addEventListener('keydown', e => { if(e.key === 'Escape' && resolveFn) close(null); });
 }
 
 function close(v){
+  ++loadSeq;
   $('#sp')?.classList.remove('on');
   $('#scrim').classList.remove('on');
   const f = resolveFn; resolveFn = null; picked = null; marked = new Set();
@@ -94,8 +97,10 @@ function render(){
 
 /** pickSession() → a project id to open, or null if cancelled.
     pickSession({ mode: 'delete' }) → the ids ticked for deletion, or null. */
-export async function pickSession(opts = {}){
+export function pickSession(opts = {}){
   ensureDom();
+  resolveFn?.(null);                 // a new invocation also settles the previous one
+  const seq = ++loadSeq, result = new Promise(r => { resolveFn = r; });
   mode = opts.mode === 'delete' ? 'delete' : 'open';
   marked = new Set();
   const title = mode === 'delete' ? 'Delete projects' : 'Load a project';
@@ -106,8 +111,12 @@ export async function pickSession(opts = {}){
   $('#spQ').value = '';
   $('#sp').classList.add('on');
   $('#scrim').classList.add('on');
-  rows = await listSessions();
-  render();
-  setTimeout(() => $('#spQ').focus(), 60);
-  return new Promise(r => { resolveFn = r; });
+  rows = []; picked = null;
+  $('#spList').textContent = 'Loading…'; $('#spSel').textContent = '';
+  listSessions().then(found => {
+    if(seq !== loadSeq || !resolveFn) return;  // cancellation while the list was loading is final
+    rows = found; render();
+    setTimeout(() => { if(seq === loadSeq && resolveFn) $('#spQ').focus(); }, 60);
+  });
+  return result;
 }

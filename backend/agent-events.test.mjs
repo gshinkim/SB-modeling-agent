@@ -40,5 +40,7 @@ for (const [raw, want] of [
   });
   assert.deepEqual(seen.find(e => e.type === 'tools'),
     { type: 'tools', tools: [{ name: 'load_skill', input: { name: 'mca', by: 'router' } }] });
+  assert.deepEqual(seen.find(e => e.type === 'session'), { type: 'session', sessionId: null },
+    'a stopped route must not leave an id the CLI never created');
 }
 console.log('agent-events.test.mjs ok');

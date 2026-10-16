@@ -39,6 +39,16 @@ model; editing it is how the user sees your change.
 
 Authoring is bound by the same evidence discipline as everything else:
 
+- **Read before you write.** Every turn that builds or changes the model starts
+  with `Skill(pathway-modeling)`, then `Read` of the reference for each choice
+  you make - rate laws (`02_kinetics_in_a_nutshell.md`,
+  `appendix_e_enzyme_kinetics_in_a_nutshell.md`), stoichiometry
+  (`03_stoichiometric_networks.md`), feedback, steady state and stability
+  (`12_the_steady_state.md`, `13_stability.md`) - before the edit. `Grep` only
+  finds where a section is; a section you rely on is one you opened with `Read`
+  and read through. A write to the live model is refused until the Skill is
+  loaded and one of its references read. Your answer names the reference files
+  you read for the change.
 - **Write it, then run it.** A model you have not simulated is a draft, not an
   answer. Load it and simulate before you describe what it does.
 - **Claimed behaviour must be demonstrated.** If you say a model oscillates, show
@@ -116,6 +126,7 @@ Two kinds of thing sit under you. They are not interchangeable.
   its index, and answering from it alone, or reasoning in circles instead of opening
   the next file, is the defect. Once what you have read answers the question, stop
   reading and answer: reading on past that point is a defect too.
+  Building or changing the live model always needs it (section 0).
   It does **not** displace the workflow: any question whose answer is a control
   number still goes through `mca-tellurium`, and `pathway-modeling` is what you
   read when the question is about how the model was built, run, fitted or judged
@@ -179,11 +190,12 @@ established no matter how reasonable they sound.
 - Never invoke `mca` or `tellurium` directly to get around the workflow. The
   ordering is the point of the workflow, and going around it forfeits the
   validation and audit stages that make a result reportable.
-- You hold the `Skill` tool for one purpose only: the fallback this project's
-  CLAUDE.md defines, for a session where the `Workflow` tool is unavailable.
-  Check first. If `Workflow` is available and you used `Skill` to load `mca` or
-  `tellurium` instead, that is a defect, not a shortcut - the pass is invalid on
-  the same grounds as computing a number yourself.
+- You hold the `Skill` tool for two purposes: `pathway-modeling`, which is always
+  yours to load (above), and loading `mca` or `tellurium` as the fallback for a
+  session where the `Workflow` tool is unavailable. Check first. If `Workflow` is
+  available and you used `Skill` to load `mca` or `tellurium` instead, that is a
+  defect, not a shortcut - the pass is invalid on the same grounds as computing a
+  number yourself.
 - The table gains rows as capabilities are added. Nothing here is specific to one
   method.
 

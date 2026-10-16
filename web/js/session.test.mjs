@@ -225,3 +225,34 @@ assert.equal(slug('Untitled project'), 'Untitled-project');
 }
 
 console.log('session id ok');
+
+{
+  // The editor has its own debounce, separate from session autosave. Its pending
+  // model writes must finish in the old project before open replaces that id.
+  const order = [];
+  let releaseWrite;
+  const writeGate = new Promise(resolve => { releaseWrite = resolve; });
+  initSession(hooks({ beforeLeave: async saveEdits => {
+    order.push('leave:' + saveEdits);
+    await writeGate;
+    order.push('editor write A');
+  }, setAll: () => order.push('setAll B') }));
+  globalThis.fetch = (path, opts) => {
+    order.push(path);
+    return ok({ id: JSON.parse(opts.body).id });
+  };
+  S.sessionDirId = 'A';
+  const opening = openSessionById('B');
+  await tick();
+  assert.deepEqual(order, ['leave:true'], 'opening waits for the old editor write');
+  assert.equal(S.sessionDirId, 'A');
+  releaseWrite(); await opening;
+  assert.deepEqual(order, ['leave:true', 'editor write A', '/api/sessions/open', 'setAll B']);
+  assert.equal(S.sessionDirId, 'B');
+  initSession(hooks({ beforeLeave: saveEdits => order.push('delete leave:' + saveEdits) }));
+  await deleteSessionById('B');
+  assert.ok(order.indexOf('delete leave:false') < order.indexOf('/api/sessions/delete'),
+    'deletion drains writes without flushing pending editor edits');
+  delete globalThis.fetch; S.sessionDirId = null;
+}
+console.log('editor switching hook ok');

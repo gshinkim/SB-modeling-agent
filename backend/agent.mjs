@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { FORMAT, WORKFLOW_OFF, summaryBlock } from '../web/js/prompt.mjs';
 import { logLine, hintLine, autoBlock } from './router.mjs';
 import { VENV_PY } from './tellurium.mjs';
@@ -147,6 +147,13 @@ THE LIVE MODEL for this project is \`${modelPath}\`. Wherever your agent definit
 says workspace/model.txt, it means this file. Never read or edit workspace/model.txt:
 that is the default model, not this project's.`;
 
+/* The live model may not be written until pathway-modeling has been loaded and one of
+   its reference files read (backend/model-gate.mjs; local-agent.mjs's modelGate is the
+   same rule). A hook, not prose: the prose alone was skipped. */
+export const modelGateHook = (root, modelPath) => ({ PreToolUse: [{ matcher: 'Edit|Write|MultiEdit',
+  hooks: [{ type: 'command', command:
+    `"${process.execPath}" "${join(root, 'backend', 'model-gate.mjs')}" "${resolve(root, modelPath)}"` }] }] });
+
 export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = true,
                             liveModel = '', modelPath = 'workspace/model.txt',
                             scratch = '', summary = '' }) {
@@ -179,7 +186,7 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
     '--append-system-prompt', projectModel(SYSTEM_APPEND + skillsBlock(root) + (scratch ? scratchBlock(scratch) : '') +
                               liveModelBlock(liveModel) + summaryBlock(summary) +
                               (useWorkflow ? '' : '\n\n' + NO_WORKFLOW), modelPath),
-    '--settings', JSON.stringify({ enableWorkflows: useWorkflow }),
+    '--settings', JSON.stringify({ enableWorkflows: useWorkflow, hooks: modelGateHook(root, modelPath) }),
     '--add-dir', root,
     ...(scratch && !scratch.startsWith(root) ? ['--add-dir', scratch] : []),
   ];
@@ -196,9 +203,18 @@ export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow
      turn dies on a restart. */
   const resuming = !!sessionId && (resume || STARTED.has(sessionId));
   const sid = resuming ? sessionId : randomUUID();
-  STARTED.add(sid);
+  let established = resuming;
   // UI events out, the same shapes runLocalAgent emits: stream-json never leaves this file.
-  const emit = raw => { const ev = toUiEvent(raw); if (ev) onEvent(ev); };
+  const emit = raw => {
+    if (raw.type === 'system' && raw.subtype === 'init') {
+      established = true;
+      STARTED.add(sid);
+    }
+    // Routing can be stopped, or spawn can fail, before the CLI creates a session.
+    // Clear the provisional id so the next turn does not --resume a nonexistent one.
+    if (raw.type === 'done' && !established) onEvent({ type: 'session', sessionId: null });
+    const ev = toUiEvent(raw); if (ev) onEvent(ev);
+  };
   let proc = null, killed = false;
   (async () => {
     // The Skill router (backend/router.mjs), if switched on in Settings. The local

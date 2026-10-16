@@ -12,6 +12,7 @@ import { initAnalysis, onRun, coefficientsCSV, reportMarkdown, describeRun } fro
 import { initFiles } from './files.mjs';
 import { initSearch } from './search.mjs';
 import { initSession, saveSoon, savedId } from './session.mjs';
+import { simulationSettings, simulationError } from './simulation.mjs';
 
 const editor = $('#model');
 
@@ -27,10 +28,11 @@ function syncGutter(){
   if(n !== gutterLines){ gutterLines = n; gutter.textContent = Array.from({length:n}, (_, i) => i+1).join('\n'); }
   gutter.scrollTop = editor.scrollTop;
 }
-editor.addEventListener('scroll', syncGutter);
+editor.addEventListener('scroll', () => { gutter.scrollTop = editor.scrollTop; });
 
-const cfg = () => ({ start:+$('#tStart').value||0, end:+$('#tEnd').value||100,
-                     points:+$('#nPts').value||50 });
+const cfg = () => simulationSettings({ start: $('#tStart').value, end: $('#tEnd').value,
+                                      points: $('#nPts').value });
+const savedSettings = () => simulationError(cfg()) ? undefined : cfg();
 
 /* ---------------- run ----------------
    Two modes, both solved by Tellurium: a fixed window, or "keep going until the
@@ -40,12 +42,13 @@ let steadyMode = store.get('steadyMode', false);
 
 async function run(){
   const c = cfg();
-  if(!steadyMode && c.end <= c.start) return status('err','End time must exceed start');
   const seq = ++runSeq;
+  const configError = simulationError(c, steadyMode);
   syncGutter();
   if(!editor.value.trim()){                        // nothing to ask Tellurium yet: not an error
     clearTimeout(busyTimer);
     S.result = null; draw(); onRun(null);
+    renderControls(editor, {}); renderMeta('');
     $('#parseMsg').textContent = $('#zoomParse').textContent = $('#plotSub').textContent = $('#plotSub2').textContent = '';
     return status('', 'No model yet');
   }
@@ -54,18 +57,25 @@ async function run(){
   busyTimer = setTimeout(()=>{ if(seq===runSeq)
     status('busy', steadyMode ? 'Solving for steady state…' : 'Running…'); }, 120);
 
-  const r = steadyMode
-    ? await api.settle({ model: editor.value, points: c.points, end: c.end })
-    : await api.simulate({ model: editor.value, ...c });
+  let r;
+  try {
+    r = configError ? { ok: false, error: configError } : steadyMode
+      ? await api.settle({ model: editor.value, points: c.points })
+      : await api.simulate({ model: editor.value, ...c });
+  } catch(e) { r = { ok: false, error: e.message || String(e) }; }
   if(seq !== runSeq) return;                       // a newer run already won
   clearTimeout(busyTimer);
   S.lastRunMs = performance.now()-t0;
 
   if(!r.ok){
-    status('err', steadyMode ? 'No steady state' : 'Tellurium error');
+    status('err', configError ? configError : steadyMode ? 'No steady state' : 'Tellurium error');
     $('#parseMsg').innerHTML = '<span class="err">⚠ '+esc(String(r.error).split('\n')[0])+'</span>';
     $('#zoomParse').innerHTML = '<span class="err">error</span>';
     S.result = null; draw(); onRun(null);
+    renderControls(editor, {}); renderMeta('');
+    $('#plotSub').textContent = $('#plotSub2').textContent = '';
+    dispatchEvent(new CustomEvent('mca:run', { detail: { ok: false,
+      text: (steadyMode ? 'No steady state: ' : 'Tellurium could not run it: ') + String(r.error).split('\n')[0] } }));
     return;
   }
   S.result = r.result;
@@ -85,24 +95,57 @@ async function run(){
   draw();
   syncIdentity(); renderMeta(d.caption);
   onRun(S.result);
+  // the chat's model-change card reports what this run made of the new model
+  dispatchEvent(new CustomEvent('mca:run', { detail: { ok: d.kind !== 'err',
+    text: 'Re-solved: ' + d.summary + ' · ' + d.caption } }));
 }
 
-let commitT;
+let commitT = null, writeChain = Promise.resolve(), editorContext = 0;
+const failure = e => ({ error: e.message || String(e) });
+function persistEditor(src, settings){
+  // Serialize writes and capture their source before waiting for the project
+  // folder. An older slow PUT must never overwrite a more recent edit.
+  const write = writeChain.then(async () => {
+    const id = await savedId(false);
+    return Promise.all([api.putModel(src, id).catch(failure),
+      settings ? api.putSettings(settings).catch(failure) : null]);
+  });
+  writeChain = write.then(() => {}, () => {});
+  return write;
+}
+function savedStatus([put, settings]){
+  if(put?.error) status('err', 'Model not saved: ' + put.error);
+  else if(settings?.error) status('err', 'Settings not saved: ' + settings.error);
+}
 async function commit(){
-  clearTimeout(commitT);
+  clearTimeout(commitT); commitT = null;
+  clearTimeout(deb); deb = null;
   editing = false;
   // A rename or first save still in flight must land before the model PUT below,
   // or the PUT can hit the old folder id (rename) or the shared default file
   // (first save not yet claimed its id). savedId() waits for it, and an edit to a
   // project with no folder yet creates the folder first.
-  const id = await savedId(false);
+  const context = editorContext;
   // simulate at once; the save to disk runs alongside instead of in front of it
-  const [put] = await Promise.all([api.putModel(editor.value, id), run(), api.putSettings(cfg())]);
-  if(put?.error) status('err', 'Model not saved: ' + put.error);
+  const [saved] = await Promise.all([persistEditor(editor.value, savedSettings()), run()]);
+  if(context !== editorContext) return;
+  savedStatus(saved);
   // Direct edits (editor input, tStart/tEnd/nPts) all funnel through here, same as
   // a chat turn or a rename — without this, editing a session's model without ever
   // sending a chat message never reaches its saved snapshot.
   saveSoon();
+}
+
+async function leaveEditor(saveEdits){
+  const pending = editing || deb !== null || commitT !== null;
+  clearTimeout(deb); deb = null;
+  clearTimeout(commitT); commitT = null;
+  editing = false; ++editorContext; ++runSeq; clearTimeout(busyTimer);
+  if(saveEdits && pending){
+    savedStatus(await persistEditor(editor.value, savedSettings()));
+    saveSoon();
+  }
+  await writeChain;                     // writes land in the old folder; no need to wait for simulation
 }
 
 // sliders re-simulate on every movement, not on release (see latestOnly)
@@ -147,15 +190,19 @@ $('#resetAll').onclick = ()=>{
 };
 
 /* ---------------- editor ---------------- */
-let deb;
+let deb = null;
 // True from a keystroke until commit() picks it up: an AI edit arriving in that
 // window must not replace what the user is typing (see setOnModelChanged).
 let editing = false;
+// A keystroke only arms timers. The gutter waits for the next frame, and the run
+// (simulate, rebuild sliders, re-render analysis, save) waits for a real pause:
+// at 300 ms it fired between keystrokes and its DOM work landed mid-typing.
+let gutterFrame = 0;
 editor.addEventListener('input', ()=>{
+  if(!editing) status('busy','Editing…');
   editing = true;
-  syncGutter();
-  status('busy','Editing…');
-  clearTimeout(deb); deb=setTimeout(commit, 300);
+  if(!gutterFrame) gutterFrame = requestAnimationFrame(()=>{ gutterFrame = 0; syncGutter(); });
+  clearTimeout(deb); deb=setTimeout(commit, 700);
 });
 $('#rerunBtn').onclick = ()=>{ clearTimeout(deb); clearTimeout(commitT); commit(); };
 /* Revert: back to the text this model had when it was opened (boot, project open,
@@ -192,10 +239,10 @@ $('#scrim').onclick=()=>{ if(document.querySelector('#fp')?.classList.contains('
   zoomEditor(false); zoomPlot(false); closeSettings(); };
 
 /* ---------------- side panel ---------------- */
-/* The parameters popover floats over the plot, so it lives on the Time course tab. */
+/* The parameters popover floats over the plot, so it opens the Model tab, where the plot is. */
 function togglePanel(force){
   const p=$('#side'), on = force ?? p.hidden;
-  if(on) go('workspace','sim');
+  if(on) go('workspace','model');
   p.hidden = !on;
   $('#panelBtn').setAttribute('aria-expanded',on);
 }
@@ -246,10 +293,12 @@ addEventListener('keydown',e=>{
 // editor already shows changes nothing, so it must not reset the cursor either.
 // A user who is mid-keystroke wins outright — the AI's edit is dropped, not queued,
 // since applying it after the fact would still clobber whatever they typed next.
+// true when the edit was applied: chat.mjs shows the change only then
 setOnModelChanged(src=>{
-  if(src === editor.value) return;
-  if(editing) return status('err', 'AI edited the model while you were typing — kept your text');
+  if(src === editor.value) return false;
+  if(editing){ status('err', 'AI edited the model while you were typing — kept your text'); return false; }
   editor.value = src; setOpened(); run();
+  return true;
 });
 (async function boot(){
   const savedTheme = store.get('theme',null); if(savedTheme) applyTheme(savedTheme);
@@ -280,9 +329,10 @@ setOnModelChanged(src=>{
   initSession({
     getName: projName,
     getModel: () => editor.value,
-    getSettings: cfg,
+    getSettings: savedSettings,
     getChats: dumpChats,
     stopTurn,
+    beforeLeave: leaveEditor,
     // a deleted session's name must not survive to regenerate the folder it named
     reset: () => { setProjName(PROJ_DEF); loadChats([]); },
     setAll: s => {

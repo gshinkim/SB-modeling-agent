@@ -4,7 +4,8 @@ import { $, css, el, fmt, ticks, SERIES, esc } from './util.mjs';
    channel (dash) rather than a ninth invented hue, so no two series ever share
    a look. */
 const hueOf  = i => css(SERIES[i % 8]);
-const dashOf = i => (i < 8 ? null : i < 16 ? '7 4' : '2 3');
+export const dashOf = i => i < 8 ? null : i < 16 ? '7 4' : i < 24 ? '2 3'
+  : `7 3 2 ${3 * (Math.floor(i / 8) - 1)}`;
 import { S } from './state.mjs';
 
 export function renderLegend(){
@@ -35,12 +36,13 @@ export function renderTable(){
   v.innerHTML=h+'</tbody></table>';
 }
 
-export function draw(){
-  const svg=$('#chart'), wrap=$('#svgWrap');
-  svg.textContent=''; renderLegend();
-  const W=wrap.clientWidth, H=wrap.clientHeight;
+// Exports can render into a detached SVG, even while another tab hides the plot.
+export function draw(target){
+  const svg=target?.svg ?? $('#chart'), wrap=target ? null : $('#svgWrap');
+  const W=target?.width ?? wrap.clientWidth, H=target?.height ?? wrap.clientHeight;
   if(!W||!H) return;
-  $('#zoomReset').hidden = !S.view;
+  svg.textContent='';
+  if(!target){ renderLegend(); $('#zoomReset').hidden = !S.view; }
   const r=S.result;
   // Every number on this chart is computed by Tellurium. Anything without that
   // provenance is a bug, and is refused rather than drawn.
@@ -72,7 +74,7 @@ export function draw(){
   const pw=W-pad.l-pad.r, ph=H-pad.t-pad.b;
   if(pw<40||ph<40) return;
   const x=v=>pad.l+(v-T0)/(T1-T0||1)*pw, y=v=>pad.t+ph-(v-lo)/(hi-lo)*ph;
-  S.geom={pad,pw,ph,T0,T1,W,H};
+  if(!target) S.geom={pad,pw,ph,T0,T1,W,H};
 
   const g=el('g'); svg.append(g);
   yTicks.forEach(v=>{
@@ -124,6 +126,7 @@ export function draw(){
     lb.textContent='steady state · t='+fmt(r.settleTime); plot.append(lb);
   }
 
+  if(target) return;
   const cross=el('line',{y1:pad.t,y2:pad.t+ph,stroke:css('--axis'),'stroke-width':1,opacity:0});
   svg.append(cross);
   const dots=el('g',{opacity:0}); svg.append(dots);

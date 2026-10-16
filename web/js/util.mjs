@@ -24,9 +24,24 @@ export const fmt = v =>
 export const numText = v => String(+(+v).toPrecision(6));
 
 export function ticks(lo,hi,n){
-  const raw=(hi-lo)/n, mag=Math.pow(10,Math.floor(Math.log10(raw||1)));
-  const step=([1,2,2.5,5,10].find(m=>m*mag>=raw) ?? 10)*mag;
-  const out=[]; for(let v=Math.ceil(lo/step)*step; v<=hi+step*1e-9; v+=step) out.push(+v.toFixed(10));
+  if(!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo || !Number.isFinite(n) || n <= 0) return [];
+  if(hi === lo) return [lo];
+  n = Math.max(1, Math.min(1000, Math.floor(n)));
+  let raw = (hi-lo)/n;
+  if(!Number.isFinite(raw)) raw = hi/n - lo/n;
+  if(!Number.isFinite(raw)) raw = Math.max(Math.abs(lo), Math.abs(hi));
+  raw = Math.max(Number.MIN_VALUE, raw);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw))) || Number.MIN_VALUE;
+  const step=([1,2,2.5,5,10].find(m=>Number.isFinite(m*mag) && m*mag>=raw) ?? 1)*mag;
+  const first = Math.ceil(lo/step)*step, places = Math.max(0, 1-Math.floor(Math.log10(step))), out=[];
+  // Adding a small step to a large timestamp can round back to the same number.
+  // Index the ticks instead, bound the loop, and keep only distinct finite values.
+  for(let i=0; i<=n*2+2; i++){
+    const v=first+i*step;
+    if(!Number.isFinite(v) || v>hi+step*1e-9) break;
+    const value=places<=100 ? +v.toFixed(places) : v;
+    if(value>=lo-step*1e-9 && (out.length===0 || value>out.at(-1))) out.push(value);
+  }
   return out;
 }
 

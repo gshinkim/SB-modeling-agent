@@ -61,4 +61,25 @@ const editor = v => ({ value: v });
   assert.equal(e.value, 'model m\n  S1 -> S2; k*S1\n  k = 4\nend', 'edit stays inside model ... end');
 }
 
+{
+  const e = editor('// archived; k1 = 5\n/*\nk1 = 6;\n*/\nk1 = +1; # keep this comment');
+  writeOnly(e, 'k1', 9);
+  assert.equal(e.value, '// archived; k1 = 5\n/*\nk1 = 6;\n*/\nk1 = 9; # keep this comment',
+    'semicolons and numeric assignments inside comments are untouched');
+}
+
+{
+  const e = editor('model m\n  species S1;\n  S1 -> S2; k*S1;\nend');
+  writeOnly(e, 'S1', 4);
+  assert.equal(e.value, 'model m\n  species S1;\n  S1 -> S2; k*S1;\nS1 = 4;\nend',
+    'an unset initial condition is assigned inside its model');
+}
+
+{
+  const e = editor('model *main()\n species S1;\nend\nmodel helper()\n species X;\nend');
+  writeOnly(e, 'S1', 2);
+  assert.equal(e.value, 'model *main()\n species S1;\nS1 = 2;\nend\nmodel helper()\n species X;\nend',
+    'the main model receives a missing assignment even when a helper follows');
+}
+
 console.log('panel writeOnly ok');

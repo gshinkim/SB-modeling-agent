@@ -15,8 +15,26 @@ import { beginTurn } from './sessions.mjs';
     to `emit`, `end` is called once the turn's history is on disk. Returns stop(). */
 export function runTurn({ root, sdir, mfile, scratch, message, ask, routerCfg, runtime, agent, args,
                           compact, shorten, editorEcho, emit: send, end }) {
-  let run = null, stopped = false, watcher = null;
+  let run = null, stopped = false, watcher = null, mem = null, t = null, finished = false;
   const unwatch = () => { watcher?.close(); watcher = null; };
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    unwatch();
+    end();
+  };
+  const fail = async e => {
+    console.error('[turn]', e);
+    if (finished) return;
+    unwatch();
+    try {
+      send({ type: 'fatal', error: String(e.message || e) });
+      send({ type: 'done', code: 1 });
+    } finally {
+      try { await mem?.end(t ? message : undefined, t?.thoughts, t?.body); }
+      finally { finish(); }
+    }
+  };
 
   (async () => {
     // The project's own folder is where its memory (history.md) and its scratch live.
@@ -24,13 +42,16 @@ export function runTurn({ root, sdir, mfile, scratch, message, ask, routerCfg, r
     // no separate message history — one copy of each turn, never two.
     // The project may be renamed while this turn runs: beginTurn holds its folder so the
     // old path keeps working (sessions.mjs holdDir) until the turn's history is written.
-    const mem = sdir ? await beginTurn(sdir, { compact, shorten }) : null;
+    mem = sdir ? await beginTurn(sdir, { compact, shorten }) : null;
     const modelPath = relative(root, mfile).replaceAll('\\', '/');   // prompts and agent.mjs compare it as posix
     const before = await readFile(mfile, 'utf8').catch(()=> '');
 
     // The awaits above (readHistory can wait behind a prior turn's compaction) can
     // outlast the client; it has then already stopped the turn, so never start the agent.
-    if (stopped) return mem?.end();
+    if (stopped) {
+      try { await mem?.end(); } finally { finish(); }
+      return;
+    }
 
     /* The AI's edits to the model reach the editor as they happen, not when the turn
        ends: a local 27B turn runs for many minutes, and a turn that is stopped or cut
@@ -55,28 +76,30 @@ export function runTurn({ root, sdir, mfile, scratch, message, ask, routerCfg, r
     // Accumulated across the whole turn, appended to history.md when it ends. A
     // whole-block re-send (Claude Code's final assistant message) repeats what the
     // deltas already streamed, so drop it rather than doubling the text.
-    const t = newTurn(message, { log: [], history: [] });
+    t = newTurn(message, { log: [], history: [] });
 
     // Events also arrive out of order relative to each other (each onEvent call is
     // its own async invocation), so they're queued too: 'result' must not reach the
     // browser before the model_changed push it triggers below.
     let eq = Promise.resolve();
-    const onEvent = ev => (eq = eq.then(() => handle(ev)).catch(e => console.error('[event]', e)));
+    const onEvent = ev => (eq = eq.then(() => handle(ev)).catch(fail));
     const handle = async ev => {
+        if (finished) return;
         if (ev.type === 'result') await pushModel();
-        send(ev);
-        t.feed(ev);
         if (ev.type === 'done') {
           // one last look, in case the final write landed after the watcher's last event
           unwatch();
           await pushModel();
+        }
+        send(ev);
+        t.feed(ev);
+        if (ev.type === 'done') {
 
           /* Persisting memory must never fail the turn. Every turn that ends — answered,
              cut off, failed or stopped — is written at once; the thinking summary and the
              fold then run in the background, so neither the chat nor the next turn waits for the model. */
-          await mem?.end(message, t.thoughts, t.body);
-
-          end();
+          try { await mem?.end(message, t.thoughts, t.body); }
+          finally { finish(); }
         }
       };
 
@@ -91,7 +114,7 @@ export function runTurn({ root, sdir, mfile, scratch, message, ask, routerCfg, r
     run = agent({ ...args, root, prompt: (ask ?? message) + SKILL_NOTE, router, liveModel: before, modelPath,
                   scratch, summary: mem?.memory ?? '', onEvent });
     send({ type: 'session', sessionId: run.sessionId ?? args.sessionId ?? null, runtime: runtime || 'claude-code' });
-  })().catch(e => { console.error('[turn]', e); unwatch(); end(); });
+  })().catch(fail);
 
   return () => { stopped = true; unwatch(); run?.kill(); };
 }

@@ -2,7 +2,7 @@
    No DOM: feeds a turn the events a runtime emits and pins the state send() paints,
    and what the turn writes to the chat's log and history when it ends. */
 import assert from 'node:assert/strict';
-import { newTurn } from './turn.mjs';
+import { newTurn, stepText, lineDiff } from './turn.mjs';
 
 const chat = () => ({ history: [], log: [], sessionId: null });
 const run = (events, c = chat(), q = 'q') => {
@@ -30,7 +30,7 @@ const run = (events, c = chat(), q = 'q') => {
   // 'done' and 'closed' both arrive on the server path: one exchange, not two
   const { t, c } = run([{ type:'session', sessionId:'s1' }, { type:'delta', text:'42' },
                         { type:'done', code:0 }, { type:'closed' }]);
-  assert.deepEqual(c.log, [{ q:'q', a:'42', tools:[] }]);
+  assert.deepEqual(c.log.map(({ q, a, tools }) => ({ q, a, tools })), [{ q:'q', a:'42', tools:[] }]);
   assert.deepEqual(c.history, [{ role:'user', content:'q' }, { role:'assistant', content:'42' }]);
   assert.equal(c.sessionId, 's1');
   assert.equal(t.status, null);
@@ -55,7 +55,7 @@ const run = (events, c = chat(), q = 'q') => {
 {
   // an agent that finished ('done') with no text IS logged, as "(no answer)"
   const { c } = run([{ type:'done', code:0 }]);
-  assert.deepEqual(c.log, [{ q:'q', a:'', tools:[] }]);
+  assert.deepEqual(c.log.map(({ q, a, tools }) => ({ q, a, tools })), [{ q:'q', a:'', tools:[] }]);
   assert.equal(c.history[1].content, '(no answer)');
 }
 
@@ -132,7 +132,7 @@ const run = (events, c = chat(), q = 'q') => {
   // what Stop keeps: the answer so far is still logged, as it always was
   const { c } = run([{ type:'delta', text:'partial' }, { type:'closed', stopped:true },
                      { type:'done', code:0 }]);
-  assert.deepEqual(c.log, [{ q:'q', a:'partial', tools:[] }]);
+  assert.deepEqual(c.log.map(({ q, a, tools }) => ({ q, a, tools })), [{ q:'q', a:'partial', tools:[] }]);
   assert.equal(c.history.length, 2);
 }
 
@@ -143,4 +143,29 @@ console.log('turn state ok');
   const { t, c } = run([{ type: 'delta', text: 'half an ans' }, { type: 'closed', stopped: true, detached: true }]);
   assert.deepEqual([c.log, c.history], [[], []], 'a partial answer saved now would be saved again, whole, on return');
   assert.equal(t.feed({ type: 'delta', text: 'wer' }), false, 'and this page stops listening');
+}
+
+// stepText and lineDiff
+assert.equal(stepText('simulate'), 'Simulated with Tellurium');
+assert.equal(stepText('skill: mca'), 'Loaded the mca skill');
+assert.equal(stepText('phase:Validate'), 'Phase: Validate');
+assert.equal(stepText('mystery_tool'), 'mystery_tool');
+assert.deepEqual(lineDiff('a\nb\nk = 1', 'b\na\nk = 2\nc'), { removed: ['k = 1'], added: ['k = 2', 'c'] });
+assert.deepEqual(lineDiff('x\nx', 'x'), { removed: ['x'], added: [] });
+console.log('stepText, lineDiff ok');
+
+// a finished turn logs what it showed, so a reopened project can show it again
+{
+  const c = { log: [], history: [] }, t = newTurn('q', c);
+  t.feed({ type: 'tools', tools: [{ name: 'Read' }, { name: 'Read' }, { name: 'Skill', input: { skill: 'mca' } }] });
+  t.feed({ type: 'phase', phase: 'Validate' });
+  t.feed({ type: 'thinking', text: 'hmm' });
+  t.changes.push({ before: 'a', after: 'b', run: null });
+  t.feed({ type: 'result', text: 'answer' });
+  t.feed({ type: 'done' });
+  const e = c.log[0];
+  assert.deepEqual(e.steps, [['read', 2], ['skill: mca', 1], ['phase:Validate', 1]]);
+  assert.ok(e.thoughts.includes('hmm') && Number.isInteger(e.secs));
+  assert.equal(e.changes[0].after, 'b');
+  console.log('logged turn keeps steps, thoughts, changes ok');
 }

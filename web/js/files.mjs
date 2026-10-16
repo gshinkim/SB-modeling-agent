@@ -28,9 +28,10 @@ let files = [], root = null;
 // goes there if the project is switched while there are unsaved edits.
 let cur = null;        // { path, where, kind: 'text'|'image'|'bin', saved, mtime, size, readonly, stale }
 let pending = null;    // openFile() before the list has loaded
-let loadSeq = 0, armed = false;
+let loadSeq = 0, showSeq = 0, listWhere = null, armed = false;
 
 const where = () => ({ project: currentId() ?? '', dir: scratchDir() });
+const context = q => JSON.stringify(q);
 const url = (path, q, extra = {}) => path + '?' + new URLSearchParams({ ...q, ...extra });
 async function api(u, opts) {
   const r = await fetch(u, opts);
@@ -61,12 +62,19 @@ function renderList(error) {
 }
 
 async function load() {
-  if (S.env?.hosted) { files = []; root = null; return renderList('Files are only available when MCA Atlas runs on your machine'); }
   const seq = ++loadSeq, q = where();
+  if (listWhere !== context(q)) {
+    // The old list belongs to another folder. Invalidate pending reads before a
+    // click or a late response can show its contents under the new project.
+    ++showSeq; listWhere = context(q); files = []; root = null;
+    if (cur && !dirty()) cur = null;
+    renderList(); paint();
+  }
+  if (S.env?.hosted) { files = []; root = null; return renderList('Files are only available when MCA Atlas runs on your machine'); }
   let r;
   try { r = await api(url('/api/files', q)); }
   catch (e) { if (seq === loadSeq) { files = []; renderList(String(e.message || e)); } return; }
-  if (seq !== loadSeq) return;
+  if (seq !== loadSeq || context(q) !== context(where())) return;
   const moved = root !== null && r.root !== root;
   ({ files, root } = r);
   // the project's own three files lead, in this order; the rest keep the server's newest-first order (sort is stable)
@@ -75,9 +83,10 @@ async function load() {
   if (cur && JSON.stringify(cur.where) === JSON.stringify(q)) {
     const f = files.find(x => x.path === cur.path);
     // changed on disk (the assistant rewrote it): reload unless that would drop edits
-    if (f && f.mtime !== cur.mtime) { if (dirty()) cur.stale = true; else await show(cur.path, f); }
+    if (f && f.mtime !== cur.mtime) { if (dirty()) cur.stale = true; else await show(cur.path, f, q); }
     else if (!f && !dirty()) cur = null;
   } else if (cur && moved && !dirty()) cur = null;   // another project's file, nothing to lose
+  if (seq !== loadSeq || context(q) !== context(where())) return;
   renderList(); paint();
   if (pending) { const p = pending; pending = null; select(p); }
 }
@@ -137,8 +146,9 @@ function disarm() {
 }
 
 /** Load `path` into the right-hand side. `f` is its list entry. */
-async function show(path, f) {
-  const q = where();
+async function show(path, f, q = where()) {
+  const seq = ++showSeq, before = cur, contents = ta().value;
+  const current = () => seq === showSeq && context(q) === context(where());
   const next = { path, where: q, mtime: f.mtime, size: f.size, saved: '', stale: false,
                  kind: IMAGE.includes(ext(path)) ? 'image' : f.text ? 'text' : 'bin',
                  tooBig: !f.text && f.size > 1048576,
@@ -147,8 +157,11 @@ async function show(path, f) {
   if (next.kind === 'text') {
     try {
       const r = await api(url('/api/file', q, { path }));
+      if (!current()) return;
+      // Typing while this read is in flight must not discard those new edits.
+      if (cur === before && ta().value !== contents) return;
       next.saved = r.content; next.mtime = r.mtime; next.size = r.size;
-    } catch (e) { cur = null; renderList(); return paint(String(e.message || e)); }
+    } catch (e) { if (current()) { cur = null; renderList(); paint(String(e.message || e)); } return; }
     ta().value = next.saved;
     ta().scrollTop = ta().scrollLeft = 0;
   }
@@ -157,10 +170,11 @@ async function show(path, f) {
 }
 
 async function select(path) {
+  if (listWhere !== context(where())) { pending = path; return load(); }
   if (cur && path === cur.path && JSON.stringify(cur.where) === JSON.stringify(where())) return;
   if (dirty() && !confirm(`Discard unsaved changes to ${cur.path}?`)) return;
   const f = files.find(x => x.path === path);
-  if (!f) { cur = null; renderList(); return paint(`There is no file “${path}” in this folder.`); }
+  if (!f) { ++showSeq; cur = null; renderList(); return paint(`There is no file “${path}” in this folder.`); }
   await show(path, f);
 }
 
@@ -187,10 +201,9 @@ async function del() {
   const c = cur;
   try {
     await api(url('/api/file', c.where, { path: c.path }), { method: 'DELETE' });
-    cur = null;
-    paint();
+    if (cur === c) { ++showSeq; cur = null; paint(); }
     load();
-  } catch (e) { status('Not deleted: ' + (e.message || e)); }
+  } catch (e) { if (cur === c) status('Not deleted: ' + (e.message || e)); }
 }
 
 /* -------------------------------- public -------------------------------- */

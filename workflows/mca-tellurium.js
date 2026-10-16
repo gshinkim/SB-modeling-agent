@@ -30,7 +30,7 @@ const execNote = (IN.exec ?? '').trim() ||
   `Write a single runnable script into ${workdir} (create it if needed), run it with ` +
   `Bash, and keep both the script and its output on disk — they are the reproducibility record.`
 const needsNumbers = IN.needsNumbers !== false
-const maxRepairs = Number.isInteger(IN.maxRepairs) ? IN.maxRepairs : 2
+const maxRepairs = Number.isInteger(IN.maxRepairs) && IN.maxRepairs >= 0 ? IN.maxRepairs : 2
 
 if (!question) {
   return {
@@ -392,7 +392,10 @@ instead. Do not repair a claim by inventing a source.`,
 )
 
 return {
-  status: needsNumbers ? 'VALIDATED' : 'FRAMED',
+  // The final software audit is a gate too. A missing or failing audit must not
+  // let the outer agent describe the whole workflow as successfully validated.
+  status: audit?.ok === true ? (needsNumbers ? 'VALIDATED' : 'FRAMED') : 'AUDIT_FAILED',
+  ...(audit?.ok === true ? {} : { note: 'The Tellurium software audit did not pass. Unsupported claims must not be reported as established findings.' }),
   question,
   model: model || null,
   workdir,

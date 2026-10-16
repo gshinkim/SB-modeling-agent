@@ -10,9 +10,10 @@ import { v1Base } from '../web/js/oai.mjs';
 import { startTurn, resolveScratch } from './chat.mjs';
 import { watchLive, liveMeta, stopLive } from './live.mjs';
 import { jev, laya, questions } from './router.mjs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { listSessions, saveSession, openSession, deleteSession,
          sessionDir, readHistory, parseHistory } from './sessions.mjs';
+import { typeset } from './latex.mjs';
 import { rootFor, listFiles, readText, openRaw, writeText, deleteFile, searchFiles } from './files.mjs';
 
 const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), '..'));
@@ -28,6 +29,31 @@ const HOST = process.env.HOST || '127.0.0.1';
 // Hosted: Tellurium only. AI runs in the user's browser (local models on their
 // machine, hosted models with their own key), so no keys and no code execution here.
 const HOSTED = process.env.MCA_HOSTED === '1';
+
+// Local routes can run code and edit files. A foreign page can submit JSON with
+// text/plain (no CORS preflight), and DNS rebinding can give localhost a foreign
+// Host header. Check both before dispatch; command-line callers need no Origin.
+const hostName = s => String(s).toLowerCase().replace(/^\[|\]$/g, '').replace(/^::ffff:/, '');
+const localHosts = new Set(['localhost', '127.0.0.1', '::1', hostname().toLowerCase(),
+  ...((process.env.MCA_ALLOWED_HOSTS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean))]);
+if (!['0.0.0.0', '::'].includes(HOST)) localHosts.add(hostName(HOST));
+function localRequest(req) {
+  let host;
+  try {
+    host = new URL('http://' + req.headers.host);
+    if (host.username || host.password || host.pathname !== '/' || host.search || host.hash ||
+        host.host !== String(req.headers.host).toLowerCase()) return false;
+  } catch { return false; }
+  if (!localHosts.has(hostName(host.hostname)) && hostName(host.hostname) !== hostName(req.socket.localAddress)) return false;
+  if (req.headers.origin) {
+    try {
+      const origin = new URL(req.headers.origin);
+      if (!['http:', 'https:'].includes(origin.protocol) || origin.host !== host.host ||
+          origin.origin !== req.headers.origin) return false;
+    } catch { return false; }
+  } else if (req.headers['sec-fetch-site'] === 'cross-site') return false;
+  return true;
+}
 
 const te = new Tellurium(ROOT);
 
@@ -46,10 +72,30 @@ const json = (res, code, body) => {
 
 async function body(req, limit = 4e6) {
   const chunks = []; let n = 0;
-  for await (const c of req) { n += c.length; if (n > limit) throw new Error('payload too large'); chunks.push(c); }
+  // Breaking a request's async iterator destroys its socket. Drain an oversized
+  // request instead so the caller receives the 413 JSON response, not a network error.
+  await new Promise((ok, no) => {
+    const cleanup = () => { req.off('data', data); req.off('end', done); req.off('error', fail); req.off('aborted', aborted); };
+    const fail = e => { cleanup(); no(e); };
+    const aborted = () => fail(Object.assign(new Error('request aborted'), { status: 400 }));
+    const done = () => { cleanup(); ok(); };
+    const data = c => {
+      n += c.length;
+      if (n > limit) {
+        cleanup(); chunks.length = 0; req.resume();
+        return no(Object.assign(new Error('payload too large'), { status: 413 }));
+      }
+      chunks.push(c);
+    };
+    req.on('data', data); req.on('end', done); req.on('error', fail); req.on('aborted', aborted);
+  });
   if (!chunks.length) return {};
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { throw new Error('invalid JSON body'); }
+  let parsed;
+  try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw Object.assign(new Error('invalid JSON body'), { status: 400 }); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+    throw Object.assign(new Error('JSON body must be an object'), { status: 400 });
+  return parsed;
 }
 
 /* One history.md summary (the fold: ~1000 words -> ~200; or one turn's thinking), by
@@ -222,6 +268,8 @@ const HOSTED_REPLY = {
   // the editor already holds the model client-side.
   'PUT /api/model':            [200, { ok: true }],
   'PUT /api/settings':         [200, { ok: true }],
+  'GET /api/model':            [200, { src: '' }],
+  'GET /api/settings':         [200, { start: 0, end: 100, points: 50 }],
   'GET /api/history':          [200, { summary: '', lines: [] }],
   'GET /api/fs':               [400, NOT_HOSTED],
   'POST /api/scratch':         [400, { ok: false,
@@ -236,6 +284,7 @@ const HOSTED_REPLY = {
   'DELETE /api/file':          [400, NO_FILES],
   'GET /api/search':           [400, NO_FILES],
   'POST /api/probe':           [400, NOT_HOSTED],
+  'POST /api/latex':           [400, { ok: false, ...NOT_HOSTED }],
   'GET /api/local/scan':       [200, { hosted: true, servers: [], ollama: null }],
   'POST /api/local/eject':     [200, { ejected: [] }],
   'POST /api/local/start':     [400, { ok: false, ...NOT_HOSTED }],
@@ -294,17 +343,24 @@ const routes = {
 
   'POST /api/simulate': async (req, res) => {
     const q = await body(req);
-    if (!q.model?.trim()) return json(res, 400, { ok: false, error: 'model is empty' });
+    if (typeof q.model !== 'string' || !q.model.trim()) return json(res, 400, { ok: false, error: 'model is empty' });
     json(res, 200, await te.call('simulate', q));
   },
   'POST /api/info': async (req, res) => {
     const q = await body(req);
-    if (!q.model?.trim()) return json(res, 400, { ok: false, error: 'model is empty' });
+    if (typeof q.model !== 'string' || !q.model.trim()) return json(res, 400, { ok: false, error: 'model is empty' });
     json(res, 200, await te.call('info', q));
   },
   'POST /api/steady': async (req, res) => json(res, 200, await te.call('steadyState', await body(req))),
   'POST /api/settle': async (req, res) => json(res, 200, await te.call('settle', await body(req), 120000)),
   'POST /api/mca':    async (req, res) => json(res, 200, await te.call('mca', await body(req), 120000)),
+
+  /* A ```latex block in an answer, compiled by Tectonic (backend/latex.mjs). */
+  'POST /api/latex': async (req, res) => {
+    const { src } = await body(req, 2e5);
+    if (typeof src !== 'string' || !src.trim()) return json(res, 400, { ok: false, error: 'src is empty' });
+    json(res, 200, await typeset(src, ROOT));
+  },
 
   /* An imported file becomes Antimony: SBML is converted by Tellurium. */
   'POST /api/convert': async (req, res) => json(res, 200, await te.call('antimony', await body(req))),
@@ -373,7 +429,7 @@ const routes = {
 
   'POST /api/sessions/delete': async (req, res) => {
     const { id } = await body(req);
-    try { await deleteSession(WORK, id); json(res, 200, { ok: true }); }
+    try { await deleteSession(WORK, id); stopLive(id); json(res, 200, { ok: true }); }
     catch (e) { json(res, 400, { error: String(e.message || e) }); }
   },
 
@@ -526,7 +582,8 @@ const server = createServer(async (req, res) => {
   const key = `${req.method} ${url.split('?')[0]}`;
   const handler = routes[key];
   try {
-    if (HOSTED && HOSTED_REPLY[key]) json(res, ...HOSTED_REPLY[key]);
+    if (!HOSTED && !localRequest(req)) json(res, 403, { error: 'local server requires a trusted Host and same-origin request' });
+    else if (HOSTED && HOSTED_REPLY[key]) json(res, ...HOSTED_REPLY[key]);
     else if (handler) { await ensureWorkspace(); await handler(req, res); }
     else if (req.method === 'GET') await serveStatic(req, res, url);
     else json(res, 404, { error: 'no route for ' + key });

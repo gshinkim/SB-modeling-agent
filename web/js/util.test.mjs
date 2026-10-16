@@ -3,7 +3,27 @@
    steady drag drew nothing until the slider was let go. Every movement must run at
    once, and movements that arrive mid-run must still end in a run of the latest. */
 import assert from 'node:assert/strict';
-import { latestOnly } from './util.mjs';
+import { latestOnly, ticks } from './util.mjs';
+import { spawnSync } from 'node:child_process';
+
+// Run the formerly infinite loop in a subprocess: a regression should fail with
+// a timeout instead of hanging the whole test runner and the browser alike.
+{
+  const utilUrl = new URL('./util.mjs', import.meta.url).href;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import {ticks} from ${JSON.stringify(utilUrl)}; console.log(JSON.stringify(ticks(1e16,1e16+2,6)))`],
+    { encoding: 'utf8', timeout: 2000 });
+  assert.ifError(r.error);
+  assert.equal(r.status, 0);
+  assert.deepEqual(JSON.parse(r.stdout), [1e16, 1e16+2]);
+  assert.deepEqual(ticks(0,1,5), [0,.2,.4,.6,.8,1]);
+  const tiny = ticks(0,1e-12,5);
+  assert.ok(tiny.length>2 && tiny.at(-1)>0, 'small concentrations must not round to all zero ticks');
+  assert.equal(new Set(tiny).size, tiny.length);
+  assert.ok(ticks(-1e308,1e308,6).every(Number.isFinite));
+  assert.deepEqual(ticks(0,Infinity,5), []);
+  console.log('large timestamps and small concentration ticks stay finite and distinct');
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 

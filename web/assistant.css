@@ -1,0 +1,81 @@
+/* Assistant panel: resize handle, overflow, math */
+
+/* drag handle on the inspector's left edge (chat.mjs initResize) */
+#inspector{position:relative}
+.side-grip{position:absolute;left:-3px;top:0;bottom:0;width:6px;z-index:5;cursor:col-resize;touch-action:none}
+.side-grip:hover,.side-grip:active,.side-grip:focus-visible{background:var(--accent);opacity:.45;outline:0}
+
+/* nothing an answer contains may push the panel wider than itself */
+#msgs,#msgs>.thread,#msgs .msg,#chat .txt{min-width:0}
+#msgs .msg{overflow-wrap:anywhere}
+#msgs .msg.ai{max-width:100%;box-sizing:border-box}
+#chat .txt :is(pre,table,figure){max-width:100%;overflow-x:auto}
+#chat .txt :is(img,svg){max-width:100%;height:auto}
+#chat .txt code{overflow-wrap:anywhere;word-break:break-word}
+#chat .txt pre code{overflow-wrap:normal;word-break:normal;white-space:pre}
+
+/* LaTeX: MathJax maths, Tectonic-compiled blocks (latex.mjs) */
+#chat .txt mjx-container[display="true"]{display:block;margin:.5em 0;padding:2px 0;max-width:100%;overflow-x:auto;overflow-y:hidden}
+#chat .txt mjx-container svg{max-width:none}
+.math-src{font-family:var(--mono);font-size:12px}
+/* the source shows while it compiles (dimmed) and if it fails */
+latex-doc{display:block;white-space:pre-wrap;font-family:var(--mono);font-size:12px;overflow-wrap:anywhere}
+latex-doc:not(.done){opacity:.55}
+
+/* "Agent execution": what the agent did this turn, one checked step per tool (chat.mjs) */
+.agent-run{margin:2px 0 10px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg)}
+.agent-run[hidden]{display:none}
+.ar-hd{font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:6px}
+.ar-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.ar-step{position:relative;padding-left:22px;font-size:12.5px;line-height:1.45;color:var(--ink)}
+.ar-step::before{content:"";position:absolute;left:0;top:2px;width:14px;height:14px;border-radius:50%;
+  background:var(--good-ink,#1a7f37) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/12px no-repeat}
+.ar-step.phase{color:var(--accent);font-weight:600}
+.ar-step.phase::before{background:var(--accent-soft);border:1.5px solid var(--accent);box-sizing:border-box}
+/* the step in progress: a ring that turns, until the turn ends */
+.agent-run:not(.ended) .ar-step:last-child::before{background:none;border:2px solid var(--border-2);
+  border-top-color:var(--accent);box-sizing:border-box;animation:ar-spin .8s linear infinite}
+@keyframes ar-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.agent-run:not(.ended) .ar-step:last-child::before{animation:none}}
+
+/* a model change the agent made, inline in the conversation (chat.mjs changeCard) */
+.change-card{margin:0 0 10px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface)}
+.cc-hd{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--bg)}
+.cc-t{font-size:12.5px;font-weight:600}
+.cc-n{font-size:11.5px}
+.change-card .add{color:var(--good-ink,#1a7f37)}
+.change-card .del{color:var(--crit,#c62828)}
+.cc-diff{font-size:12px;line-height:1.55;padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow-y:auto}
+.cc-diff .add{background:color-mix(in srgb,var(--good-ink,#1a7f37) 10%,transparent)}
+.cc-diff .del{background:color-mix(in srgb,var(--crit,#c62828) 9%,transparent)}
+.cc-run{font-size:12px;padding:6px 10px 8px;color:var(--muted);border-top:1px solid var(--border)}
+.cc-run.ok{color:var(--good-ink,#1a7f37)}
+.cc-run.bad{color:var(--crit,#c62828)}
+
+/* an answer that carries steps or a model change uses the full width, live or replayed */
+#msgs .msg.ai:has(>.agent-run:not([hidden]),>.change-card,.md-live){align-self:stretch}
+
+/* a live, interactive diagram from a ```html fence (md.mjs liveFrame): a sandboxed frame */
+.md-live{margin:.5em 0;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}
+.md-live iframe{display:block;width:100%;height:240px;border:0}
+
+/* History pane: the full record of every chat (panes.mjs renderHistory, fullhistory.mjs) */
+#historyPane .fh-note{margin:0;font-size:12.5px;line-height:1.5}
+.fh-mem{border:1px solid var(--border);border-radius:9px;font-size:12.5px}
+.fh-mem>summary{padding:7px 10px;cursor:pointer;color:var(--muted)}
+.fh-mem-body{padding:0 10px 10px;display:flex;flex-direction:column;gap:8px}
+.fh-mem-lines{font-size:11.5px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}
+.fh-chat{display:flex;flex-direction:column;gap:12px;min-width:0}
+.fh-title{margin:6px 0 0;font-size:14px;font-weight:600;overflow-wrap:anywhere}
+.fh-title .muted{font-weight:400;font-size:12px}
+/* off-screen turns skip layout and paint: a long project stays light to scroll */
+.fh-turn{display:flex;flex-direction:column;gap:8px;min-width:0;padding-bottom:12px;border-bottom:1px solid var(--grid);
+  content-visibility:auto;contain-intrinsic-size:auto 320px}
+.fh-n{font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.fh-q{font-size:13px;font-weight:600;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;
+  padding:8px 10px;border-radius:9px;background:var(--subtle)}
+.fh-turn .think,.fh-turn .change-card{margin:0}
+.fh-turn .tk-body{white-space:pre-wrap;overflow-wrap:anywhere;max-height:none}
+.fh-a{font-size:13px;line-height:1.55;min-width:0;overflow-wrap:anywhere}
+.fh-a :is(pre,table,figure){max-width:100%;overflow-x:auto}
+.fh-a :is(img,svg){max-width:100%;height:auto}

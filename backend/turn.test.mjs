@@ -69,13 +69,31 @@ console.log('stop mid-turn writes history ok');
 /* 3. Stopped before the agent starts (the client left during the awaits): no agent, no history. */
 const before = await readFile(hfile, 'utf8');
 let started = false;
+let ended = 0;
 runTurn({ root, sdir: root, mfile, scratch: root, message: 'never', runtime: 'openai',
   agent: () => { started = true; return { kill() {} }; }, args: {}, compact: async () => '',
-  editorEcho: () => false, emit: () => assert.fail('no events'), end: () => assert.fail('no end') })();
+  editorEcho: () => false, emit: () => assert.fail('no events'), end: () => ended++ })();
 await new Promise(r => setTimeout(r, 50));
 assert.equal(started, false);
+assert.equal(ended, 1, 'stop during initialization still closes the stream and releases resources');
 assert.equal(await readFile(hfile, 'utf8'), before);
 console.log('stop before start ok');
+
+// A synchronous runtime startup failure reaches the browser and releases the turn.
+const broken = await turn('startup failure', () => { throw new Error('runtime could not start'); });
+assert.deepEqual(types(broken), ['fatal', 'done']);
+assert.equal(broken.events[0].error, 'runtime could not start');
+assert.equal(broken.events[1].code, 1);
+// A duplicate done callback must not close or append the same turn twice.
+const duplicate = await turn('one completion', a => {
+  a.onEvent({ type: 'delta', text: 'one answer' });
+  a.onEvent({ type: 'done', code: 0 });
+  a.onEvent({ type: 'done', code: 0 });
+  return { kill() {} };
+});
+assert.equal(types(duplicate).filter(t => t === 'done').length, 1);
+assert.equal(parseHistory(duplicate.history).lines.filter(l => l.includes('one completion')).length, 1);
+console.log('startup failure and duplicate completion ok');
 
 /* 4. One fold, not two: what a turn leaves in history.md is what the chat's own fold
       (web/js/turn.mjs) shows for the same events. Each of these once differed. */

@@ -1,4 +1,5 @@
 .venv/
+.tools/
 workspace/*
 !workspace/model.txt
 !workspace/settings.json

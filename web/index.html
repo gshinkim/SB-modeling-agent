@@ -10,6 +10,13 @@
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/analysis.css">
 <link rel="stylesheet" href="/files.css">
+<link rel="stylesheet" href="/assistant.css">
+<!-- LaTeX maths in the assistant's answers: MathJax's full TeX bundle (AMS, mhchem, physics, \newcommand...) -->
+<script>MathJax = { svg: { fontCache: 'none' }, startup: { typeset: false,
+  ready(){ MathJax.startup.defaultReady(); MathJax.startup.promise.then(() => {
+    document.head.append(MathJax.svgStylesheet());   // hides the screen-reader copy of each formula
+    dispatchEvent(new Event('mathjax-ready')); }); } } };</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg-full.js"></script>
 </head>
 <body>
 <div id="app">
@@ -67,12 +74,15 @@
     <div id="wsHead">
       <div class="tabbar">
         <div class="tabset" id="tabs" role="tablist">
-          <button role="tab" data-tab="sim">Time course</button>
           <button role="tab" data-tab="model">Model</button>
           <button role="tab" data-tab="notes">Analysis</button>
           <button role="tab" data-tab="meta">Metadata</button>
         </div>
         <div class="tabbar-r">
+          <div class="seg-btns layout-seg" id="layoutSeg" role="group" aria-label="Layout">
+            <button data-layout="agent" title="The conversation in the middle; the model and the plot on the right">Agent</button>
+            <button data-layout="analysis" title="The plot and the model in the middle; the conversation on the right">Analysis</button>
+          </div>
           <span class="stat"><span class="dot" id="runDot"></span><span id="runStat">Ready</span></span>
           <div class="dl-wrap">
             <button class="btn" id="dlBtn" aria-haspopup="true" aria-expanded="false">Export</button>
@@ -104,7 +114,9 @@
           </div>
 
           <!-- Time course -->
-          <section class="tabpane" data-pane="sim" id="tabSim">
+          <div class="split-grip" id="splitGrip" role="separator" aria-orientation="vertical" tabindex="0"
+               aria-label="Resize the time course and the model" title="Drag to resize, or use the arrow keys"></div>
+          <section class="tabpane" data-pane="model" id="tabSim">
             <div class="sim-bar">
               <span class="mono muted" id="plotSub"></span>
               <span class="spacer"></span>

@@ -61,7 +61,7 @@ export const SKILL_NOTE = '\n\n---\n`mca`: the MCA concepts: what control coeffi
   'Before building or changing a model you must load `pathway-modeling`, then `tellurium`. Before computing, validating or reporting any control coefficient, elasticity, or rate-limiting / control-distribution claim you must load `mca` (and `tellurium` for the calculation). ' +
   'Compute every number with Tellurium in Python, never in your head.';
 
-/* The chat renders Markdown and a safe subset of inline SVG. A model that is not
+/* The chat renders Markdown, LaTeX maths and a safe subset of HTML and inline SVG. A model that is not
    told this writes a wall of plain prose, or writes HTML and sees it escaped. */
 export const FORMAT = [
   '## How to write your answer',
@@ -74,17 +74,38 @@ export const FORMAT = [
   '- `` `backticks` `` for species, parameters, reactions and file names',
   '- `## headings` once an answer runs past a few paragraphs, and bullets over prose',
   '',
-  'There is no LaTeX. `\\(…\\)`, `\\[…\\]` and `$$…$$` do not render as maths, and `$` is',
-  'Antimony\'s boundary-species marker, never a delimiter. Write an expression in',
-  'backticks instead: `` `C^J_1 = 0.24` ``, `` `dS1/dt = v1 - v2` ``.',
+  'LaTeX maths renders: `$…$` or `\\(…\\)` inline, `$$…$$` or `\\[…\\]` on its',
+  'own line for display — e.g. `$C^J_{1} = 0.24$`, `$$\\frac{dS_1}{dt} = v_1 - v_2$$`.',
+  'Use it for equations and coefficients. `$` is also Antimony\'s boundary-species',
+  'marker, so put Antimony in backticks or a fence, where nothing is read as maths.',
+  'All of LaTeX maths works: `\\begin{align}`, `\\begin{pmatrix}`, `\\newcommand`,',
+  '`\\ce{...}` (mhchem), `\\dv` (physics), `\\text{}` and so on.',
+  'Anything beyond maths goes in a ```latex fence, compiled by real LaTeX (Tectonic)',
+  'and shown typeset: tabular/booktabs tables, tikz and pgfplots figures, lists,',
+  'sections, footnotes, any CTAN package. Put `\\usepackage` lines at the top of the',
+  'fence; a full document with `\\documentclass` works too. Use ```text, not',
+  '```latex, to show LaTeX source as code.',
   '',
-  'Write Markdown, not HTML. Do not wrap the answer in a ``` fence — a fence is for',
+  'Write Markdown (GitHub-flavoured), not HTML. A small HTML subset does render',
+  '(b, i, em, strong, sub, sup, br, code, table/tr/th/td, ul/ol/li, p, span, div)',
+  'with no styles or scripts; prefer Markdown. Do not wrap the answer in a ``` fence — a fence is for',
   'code you want shown as code, and fencing the whole answer stops it rendering.',
   '',
   '### Diagrams',
   '',
-  'For a pathway, a cascade, a branch point or a control map, draw it as inline SVG',
-  'written straight into your answer. It renders. Keep it small and legible:',
+  'The chat renders two kinds, and BOTH work. Interactive diagrams are supported: never',
+  'tell the user the chat strips scripts or cannot run an interactive diagram, even if',
+  'an earlier turn or the history summary says so — that was true once and is not now.',
+  '',
+  '**Interactive** (hover tooltips, sliders that change a parameter, clickable nodes,',
+  'animation, a d3 or Plotly chart): write a complete ```html fence. It runs live in a',
+  'sandboxed frame, with <script>, <style> and event handlers all working. Libraries',
+  'load only from cdnjs.cloudflare.com or cdn.jsdelivr.net, with an exact version. The',
+  'frame has no network access (fetch is blocked) and cannot read the app or the model,',
+  'so put the numbers it needs inside the fence. Label every node and axis.',
+  '',
+  '**Static** (a pathway, a cascade, a branch point or a control map that needs no',
+  'interaction): inline SVG written straight into your answer, outside any fence:',
   '',
   '```',
   '<svg viewBox="0 0 220 60">',
@@ -95,11 +116,12 @@ export const FORMAT = [
   '</svg>',
   '```',
   '',
-  'Only these elements survive: svg, g, path, rect, circle, ellipse, line, polyline,',
-  'polygon, text, tspan, defs, marker, linearGradient, radialGradient, stop. No',
-  'script, no style, no foreignObject, no event attributes — they are stripped.',
-  'Always set viewBox so it scales. A diagram is an addition to the explanation,',
-  'never a replacement for it.',
+  'In inline SVG only these elements survive: svg, g, path, rect, circle, ellipse, line,',
+  'polyline, polygon, text, tspan, defs, marker, linearGradient, radialGradient, stop;',
+  'script, style and event attributes are removed there (and only there — use a ```html',
+  'fence when you need them). Always set viewBox so it scales. A diagram is an',
+  'addition to the explanation, never a replacement for it.',
+
 ].join('\n');
 
 /**

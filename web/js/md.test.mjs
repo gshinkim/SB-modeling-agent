@@ -122,16 +122,52 @@ assert.ok(!sanitizeSvg('<svg><g id="sp"/></svg>').includes('id="sp"'),
 console.log('svg id namespacing ok');
 
 /* ------------------------------------ tex ------------------------------------ */
-/* Nothing renders maths, so TeX a model wrote anyway must arrive as readable text
-   rather than as backslashes. */
-has('coefficient \\( C^J_{1} = 0.24 \\) is largest', '<code>C^J_1 = 0.24</code>', 'inline \\(…\\)');
-has('$$ \\frac{dS_1}{dt} = v_1 - v_2 $$', '<code>(dS_1)/(dt) = v_1 - v_2</code>', 'display $$…$$');
-has('\\[ J = k_1 \\cdot X_0 \\]', '<code>J = k_1 \u00b7 X_0</code>', 'display \\[…\\]');
-lacks('\\( x \\)', '\\(', 'no delimiter survives');
+/* No KaTeX under node: maths must come back as its own source, untouched by
+   markdown. Then with a stub KaTeX, each delimiter must reach it intact. */
+has('$a_1 * b_2 * c$', '$a_1 * b_2 * c$', 'inline maths is not read as emphasis');
+lacks('$a_1 * b_2 * c$', '<em>', 'no emphasis inside maths');
+has('$$ x_1 \\cdot y_1 $$', '<span class="math-src" data-tex="x_1 \\cdot y_1" data-display>$$ x_1 \\cdot y_1 $$</span>', 'display source kept');
+has('\\( C^J_{1} \\) and \\[ J \\]', '\\( C^J_{1} \\)', 'paren delimiters kept');
+has('`$x$` here', '<code>$x$</code>', 'a code span is not maths');
+has('```\n$$ keep $$\n```', '$$ keep $$</code>', 'a fence is not maths');
+lacks('```\n$$ keep $$\n```', 'math-src', 'no maths inside a fence');
 // `$X0` is Antimony's boundary-species marker, not maths
-has('$X0 -> S1 and $X5 are fixed', '$X0', 'a single $ is left alone');
-// and TeX shown as code was meant to be shown
-has('```\n\\( keep \\)\n```', '\\( keep \\)', 'tex inside a fence stays literal');
+lacks('$X0 -> S1; $X1 fixed', 'math-src', 'Antimony $ is left alone');
+lacks('from $5 to $10', 'math-src', 'prices are left alone');
+has('> $a_b$', '<blockquote><p><span class="math-src" data-tex="a_b">$a_b$</span>', 'maths in a blockquote');
+has('$$x$$', 'data-tex="x" data-display>', 'display source keeps its mode for the late upgrade');
+has('\\begin{align} a &= b \\end{align}', 'data-tex="\\begin{align} a &amp;= b \\end{align}" data-display', 'bare align is display maths');
+// text-mode LaTeX is a <latex-doc>, escaped, and never read as markdown or maths
+has('```latex\n\\section{A_b} $x$\n```', '<latex-doc>\\section{A_b} $x$\n</latex-doc>', 'latex fence is a document');
+has('\\begin{tabular}{cc} a & *b* \\end{tabular}', '<latex-doc>\\begin{tabular}{cc} a &amp; *b* \\end{tabular}</latex-doc>', 'bare tabular is a document');
+lacks('`\\begin{itemize}\\end{itemize}`', 'latex-doc', 'code span is not a document');
+lacks('```text\n\\begin{itemize}\\end{itemize}\n```', 'latex-doc', 'text fence shows source');
+lacks('```latex\n\\section{A} still streaming', 'latex-doc', 'an open latex fence is not compiled yet');
+lacks('<b>x</b> <latex-doc>', '<latex-doc>', 'a typed latex-doc tag is not trusted');
+
+globalThis.MathJax = { tex2svg: (t, o) => ({ outerHTML: '<K' + (o.display ? 'D' : '') + '>' + t + '</K>' }) };
+has('so $a_1*b$ is', '<K>a_1*b</K>', 'inline $ reaches mathjax');
+has('$$\n\\frac{a}{b}\n$$', '<KD>\\frac{a}{b}</K>', 'multiline $$ is display');
+has('\\[ J \\]', '<KD>J</K>', '\\[ is display');
+has('\\( J_1 \\)', '<K>J_1</K>', '\\( is inline');
+has('\\begin{pmatrix} a \\end{pmatrix} vs \\begin{gather*} x \\end{gather*}', '<KD>\\begin{gather*} x \\end{gather*}</K>', 'starred env is display');
+has('<table><tr><td>$x_1$</td></tr></table>', '<td><K>x_1</K></td>', 'maths inside held html');
+lacks('`$x$`', '<K>', 'code span never reaches mathjax');
+delete globalThis.MathJax;
 console.log('tex ok');
 
 console.log('md.test.mjs ok');
+
+
+// a ```html fence runs live, sandboxed: scripts allowed, same origin and the network not
+{
+  const out = renderMarkdown('```html\n<button onclick="x()">k1</button><script>x=()=>1</script>\n```');
+  assert.ok(out.includes('<iframe sandbox="allow-scripts"'), 'sandboxed frame');
+  assert.ok(!/allow-same-origin/.test(out), 'never same-origin');
+  assert.ok(out.includes('onclick=&quot;x()&quot;'), 'the handler reaches the frame, escaped into srcdoc');
+  assert.ok(!out.includes('<script>x='), 'no live script in the page itself');
+  assert.ok(/connect-src &#39;none&#39;/.test(out) && /form-action &#39;none&#39;/.test(out), 'no way out of the frame');
+  assert.ok(!renderMarkdown('```html\n<b>still streaming').includes('<iframe'), 'an open fence is not run yet');
+  assert.ok(!renderMarkdown('<svg><script>x()</script></svg>').includes('x()'), 'inline svg stays sanitized');
+  console.log('live html fences ok');
+}

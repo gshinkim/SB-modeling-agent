@@ -5,7 +5,7 @@
 
 import { slug } from '../web/js/util.mjs';   // one filesystem-safe name for both tiers
 export { slug };
-import { realpath, readFile, writeFile, mkdir, readdir, rename, stat, rm, symlink, lstat, unlink } from 'node:fs/promises';
+import { realpath, readFile, writeFile, mkdir, readdir, rename, stat, rm, rmdir, symlink, lstat, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, sep, join, basename } from 'node:path';
 
@@ -42,9 +42,17 @@ export async function sessionDir(runsRoot, id) {
 }
 
 const META = 'session.json';
-const readMeta = async dir => JSON.parse(await readFile(join(dir, META), 'utf8'));
+const validChats = chats => Array.isArray(chats) && chats.every(c => c && typeof c === 'object' && !Array.isArray(c) &&
+  (c.log == null || Array.isArray(c.log)));
+const readMeta = async dir => {
+  const m = JSON.parse(await readFile(join(dir, META), 'utf8'));
+  if (!m || typeof m !== 'object' || Array.isArray(m) || m.chats != null && !validChats(m.chats))
+    throw new Error('invalid session metadata');
+  return m;
+};
 
-export async function listSessions(runsRoot) {
+export function listSessions(runsRoot) { return serial(() => listSessionsNow(runsRoot)); }
+async function listSessionsNow(runsRoot) {
   const entries = await readdir(runsRoot, { withFileTypes: true }).catch(() => []);
   const out = [];
   for (const e of entries) {
@@ -111,14 +119,26 @@ async function claimId(runsRoot, want, keep, srcDir) {
     const id = n === 1 ? want : `${want}-${n}`;
     if (id === keep) return { id, dir: srcDir };
     const target = await sessionDir(runsRoot, id);
+    // rename() replaces an existing empty directory on Unix. Claim the target
+    // with exclusive mkdir first, so renaming to "runs" cannot replace scratch.
+    try { await mkdir(target); }
+    catch (err) {
+      if (['EEXIST', 'ENOTEMPTY', 'ENOTDIR'].includes(err.code) || err.code === 'EPERM' && existsSync(target)) continue;
+      throw err;
+    }
+    let reserved = true;
     try {
-      if (srcExists) await rename(srcDir, target); else await mkdir(target);
+      // Windows already refuses to replace a directory; unlike Unix it cannot
+      // rename over our empty reservation, so release that reservation first.
+      if (srcExists && process.platform === 'win32') { await rmdir(target); reserved = false; }
+      if (srcExists) await rename(srcDir, target);
       // a folder is here now: a move away from this path, made earlier, is over, or this
       // project's history would follow it into the one that left
       moved.delete(target);
       if (srcExists) await recordMove(srcDir, target);
       return { id, dir: target };
     } catch (err) {
+      if (reserved) await rmdir(target).catch(() => {}); // release only our still-empty reservation
       // taken since the check — try the next id (Windows reports a taken name as EPERM)
       if (['EEXIST', 'ENOTEMPTY', 'ENOTDIR'].includes(err.code) || err.code === 'EPERM' && existsSync(target)) continue;
       throw err;
@@ -130,13 +150,26 @@ async function claimId(runsRoot, want, keep, srcDir) {
 /* `fresh` is a project's first save: it claims its own folder (Untitled-project,
    Untitled-project-2, …) instead of writing into whatever already has that name.
    After that, the folder only moves when the name actually changes. */
-export async function saveSession(runsRoot, { id, name, fresh = false, chats = [], settings, model = '' }) {
+export function saveSession(runsRoot, q) {
+  return serial(() => saveSessionNow(runsRoot, q));
+}
+
+async function saveSessionNow(runsRoot, { id, name, fresh = false, chats, settings, model = '' }) {
+  if (id != null && typeof id !== 'string') throw new Error('id must be a string');
+  if (name != null && typeof name !== 'string') throw new Error('name must be a string');
+  if (typeof model !== 'string') throw new Error('model must be a string');
+  if (chats !== undefined && !validChats(chats)) throw new Error('chats must be an array of chats');
+  if (settings != null && (typeof settings !== 'object' || Array.isArray(settings))) throw new Error('settings must be an object');
   let dir = await sessionDir(runsRoot, id);
+  if (!fresh) dir = follow(dir); // an overlapping rename may have moved this id while the save waited
   const prev = fresh ? null : await readMeta(dir).catch(() => null);
 
-  let finalId = id;
+  name ??= prev?.name ?? id ?? 'Untitled project';
+  chats ??= prev?.chats ?? [];
+
+  let finalId = fresh ? id : basename(dir);
   if (fresh || (prev && prev.name !== name)) {
-    const claim = await claimId(runsRoot, slug(name) || 'Untitled-project', fresh ? null : id,
+    const claim = await claimId(runsRoot, slug(name) || 'Untitled-project', fresh ? null : finalId,
                                 fresh ? null : dir);
     finalId = claim.id;
     dir = claim.dir;
@@ -166,7 +199,8 @@ export async function saveSession(runsRoot, { id, name, fresh = false, chats = [
   return { id: finalId };
 }
 
-export async function openSession(runsRoot, id) {
+export function openSession(runsRoot, id) { return serial(() => openSessionNow(runsRoot, id)); }
+async function openSessionNow(runsRoot, id) {
   const dir = await sessionDir(runsRoot, id);
   const m = await readMeta(dir);          // no session.json means no session: let it throw
   const read = (f, d) => readFile(join(dir, f), 'utf8').catch(() => d);
@@ -180,10 +214,12 @@ export async function openSession(runsRoot, id) {
 
 /* Sessions share workspace/ with model.txt, settings.json and runs/. Only a folder
    holding a session.json is a session, so nothing else there can be deleted by id. */
-export async function deleteSession(runsRoot, id) {
-  const dir = await sessionDir(runsRoot, id);
-  await readMeta(dir);
-  await rm(dir, { recursive: true, force: true });
+export function deleteSession(runsRoot, id) {
+  return serial(async () => {
+    const dir = await sessionDir(runsRoot, id);
+    await readMeta(dir);
+    await rm(dir, { recursive: true, force: true });
+  });
 }
 
 /* ---------------- history.md: the agents' whole memory of a project ----------------

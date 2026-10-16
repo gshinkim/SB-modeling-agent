@@ -46,6 +46,19 @@ test('only an explicit stop ends a turn, and a new turn replaces the running one
   stopLive('nope');                                     // no turn: nothing to do
 });
 
+test('startup failure leaves no live turn, and late events cannot resurrect a finished one', () => {
+  assert.throws(() => startLive('failed', {}, () => { throw new Error('failed to start'); }), /failed to start/);
+  assert.equal(liveMeta('failed'), null);
+  assert.equal(watchLive('failed', () => {}), null);
+  let emit, end;
+  startLive('late', {}, (e, n) => { emit = e; end = n; });
+  emit({ type: 'done' }); end(); end();
+  emit({ type: 'delta', text: 'too late' });
+  const got = [];
+  watchLive('late', o => got.push(o));
+  assert.deepEqual(got, [{ type: 'done' }, null]);
+});
+
 test('a project renamed mid-turn keeps its turn, under the new id and the old one', async () => {
   const work = await mkdtemp(join(tmpdir(), 'live-'));
   const { id } = await saveSession(work, { name: 'Before', fresh: true });

@@ -14,13 +14,13 @@ export const listSessions = () => fetch('/api/sessions').then(r => r.json())
   .then(r => r.sessions ?? []).catch(() => []);
 
 let getName = () => DEFAULT_NAME, getModel = () => '', getSettings = () => ({}),
-    getChats = () => [], setAll = () => {}, stopTurn = () => {}, reset = () => {};
+    getChats = () => [], setAll = () => {}, stopTurn = () => {}, reset = () => {}, beforeLeave = () => {};
 
 /** Wire the module to the page once, at boot, rather than importing main.mjs back.
     `stopTurn(real)` ends the turn on screen (real false only leaves it: the server keeps
     running it); `reset` puts the page's project name and chats back to an untouched project. */
 export function initSession(hooks) {
-  ({ getName, getModel, getSettings, getChats, setAll, stopTurn, reset } = hooks);
+  ({ getName, getModel, getSettings, getChats, setAll, stopTurn, reset, beforeLeave = () => {} } = hooks);
 }
 
 export const currentId = () => S.sessionDirId;
@@ -112,6 +112,7 @@ function cancelPending() {
     turn, the server keeps running it, and it is picked up when that project is opened again. */
 export async function openSessionById(id) {
   stopTurn(false);                      // first: a turn that ends arms a save, flushed below
+  await beforeLeave(true);             // flush editor writes before replacing its text and folder id
   await flushPending();                 // save whatever was pending for the OLD session first
   const r = await post('/api/sessions/open', { id });
   if (r.error) throw new Error(r.error);
@@ -125,6 +126,7 @@ export async function openSessionById(id) {
     for the new one until it is touched. */
 export async function newProject() {
   stopTurn(false);                      // leave it running: it is that project's turn, not this page's
+  await beforeLeave(true);
   await flushPending();
   S.sessionDirId = null;
   touched = false;
@@ -142,7 +144,7 @@ export async function deleteSessionById(id) {
     cancelPending();                    // a save already armed for THIS id must not race the delete below
   }
   try {
-    if (isCurrent) await saveIdle();    // nor one already in flight: landing after the delete it recreates the folder
+    if (isCurrent) { await beforeLeave(false); await saveIdle(); } // drain in-flight writes without saving new edits
     const r = await post('/api/sessions/delete', { id });
     // still the open one: an overlapping delete may have settled first and another project been opened since
     if (!r.error && id === S.sessionDirId) { S.sessionDirId = null; touched = false; reset(); }

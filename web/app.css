@@ -184,7 +184,7 @@ main:not(.panel-open) #side{border-left:0}
 .hint{font-size:12px;color:var(--muted);margin-top:9px}
 .krow{margin-bottom:13px}
 .krow .top{display:flex;align-items:baseline;gap:8px;margin-bottom:5px}
-.krow .nm{font-family:var(--mono);font-size:12.5px}
+.krow .nm{font-family:var(--mono);font-size:12.5px;min-width:0;overflow-wrap:anywhere}
 .krow input[type=number]{width:82px;height:26px;margin-left:auto;text-align:right;
   background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:0 6px;
   font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
@@ -304,7 +304,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border:2px solid var(
 .fp-row.sel{background:var(--accent);color:var(--accent-ink)}
 .fp-ic{flex:none;font-size:13px;filter:grayscale(1) opacity(.75)}
 .fp-row.sel .fp-ic{filter:none}
-.fp-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fp-nm{min-width:0;overflow-wrap:anywhere}
 .fp-ft{display:flex;align-items:center;gap:8px;padding:11px 14px;border-top:1px solid var(--border)}
 .fp-ft code{font:11.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:52%}
 .browse{display:flex;gap:8px;align-items:flex-end}
@@ -440,7 +440,7 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 
 #center{flex:1;min-width:0;display:flex;flex-direction:column}
 #wsHead[hidden],.rail-btn[hidden],#inspector[hidden]{display:none}
-.tabbar{height:48px;display:flex;align-items:stretch;justify-content:space-between;gap:16px;
+.tabbar{min-height:48px;display:flex;align-items:stretch;justify-content:space-between;gap:16px;
         padding:0 24px;background:var(--surface);border-bottom:1px solid var(--border)}
 .tabset{display:flex;gap:4px}
 .tabset button,.side-tabs button{border:0;background:none;padding:0 14px;font-size:13px;font-weight:600;
@@ -448,8 +448,8 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 .tabset button:hover,.side-tabs button:hover{color:var(--ink)}
 .tabset button[aria-selected="true"],.side-tabs button[aria-selected="true"]{color:var(--ink);
   box-shadow:inset 0 -2px 0 var(--accent)}
-.tabbar-r{display:flex;align-items:center;gap:10px}
-.tabbar-r .stat{max-width:28vw;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.tabbar-r{display:flex;align-items:center;gap:10px;min-width:0}
+.tabbar-r .stat{max-width:36vw;min-width:0;overflow-wrap:anywhere;font-size:12.5px;line-height:1.3}
 .dl-menu{top:calc(100% + 6px);bottom:auto;min-width:220px;z-index:30}
 
 #stage{flex:1;min-height:0;display:flex}
@@ -457,22 +457,32 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 .view[hidden]{display:none}
 #doc{flex:1;min-width:0;overflow-y:auto}
 .doc-inner{padding:28px 40px 96px}
-.doc-inner.wide{max-width:none;min-height:100%;height:100%;padding-bottom:18px;display:flex;flex-direction:column}
+.doc-inner.wide{max-width:none;padding-left:24px;padding-right:24px;min-height:100%;height:100%;padding-bottom:18px;display:flex;flex-direction:column}
 .doc-title{display:flex;align-items:center;gap:14px}
 .doc-title h1{margin:0;font-size:28px;font-weight:700;letter-spacing:-.01em;flex:1;min-width:0;
-  outline:none;border-radius:6px;padding:0 4px;margin-left:-4px;cursor:text;white-space:nowrap;
-  overflow:hidden;caret-color:var(--accent)}
+  outline:none;border-radius:6px;padding:0 4px;margin-left:-4px;cursor:text;
+  overflow-wrap:anywhere;caret-color:var(--accent)}
 .doc-title h1:hover{background:var(--hover)}
 .doc-title h1:focus{box-shadow:0 0 0 2px var(--accent)}
 #runId{font-size:12px}
-.doc-meta{display:flex;align-items:center;gap:12px;margin:10px 0 18px;font-size:13px;color:var(--muted)}
+.doc-meta{display:flex;flex-wrap:wrap;align-items:center;gap:12px;overflow-wrap:anywhere;margin:10px 0 18px;font-size:13px;color:var(--muted)}
 .tabpane[hidden]{display:none}
-.wide .tabpane:not([hidden]){flex:1;min-height:0;display:flex;flex-direction:column}
+.wide .tabpane:not([hidden]){flex:1;min-height:0;min-width:0;display:flex;flex-direction:column}
+/* Model tab: time course left, editor right, a draggable line between (shell.mjs); title rows span all */
+.doc-inner.split{display:grid;grid-template-columns:minmax(240px,var(--simW,50%)) 16px minmax(240px,1fr);grid-template-rows:auto auto minmax(0,1fr)}
+.split>.doc-title,.split>.doc-meta{grid-column:1/-1}
+.split>#tabSim{grid-area:3/1}
+.split>#splitGrip{grid-area:3/2}
+.split>#tabModel{grid-area:3/3}
+.split-grip{position:relative;cursor:col-resize;touch-action:none;outline:0}
+.split-grip[hidden]{display:none}
+.split-grip::after{content:"";position:absolute;left:7px;top:0;bottom:0;width:2px;border-radius:1px;background:transparent}
+.split-grip:hover::after,.split-grip:active::after,.split-grip:focus-visible::after{background:var(--accent);opacity:.5}
 
 /* time course */
 #tabSim{position:relative;border-top:1px solid var(--border);padding-top:12px;gap:10px;min-height:380px}
 .sim-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.sim-bar #plotSub{font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sim-bar #plotSub{font-size:12px;min-width:0;overflow-wrap:anywhere}
 .seg-btns{display:flex;border:1px solid var(--border-2);border-radius:6px;overflow:hidden}
 .seg-btns button{min-width:32px;height:26px;padding:0 9px;border:0;border-right:1px solid var(--border-2);
   background:var(--surface);font-size:14px;cursor:pointer}
@@ -485,7 +495,7 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 #plotCard.zoom{background:var(--surface);border:1px solid var(--border);border-radius:14px}
 #legend{padding:2px 0 6px}
 .sim-foot{display:flex;gap:28px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--grid);padding-top:10px;min-height:34px}
-#side{position:absolute;top:52px;right:0;width:310px;max-height:calc(100% - 64px);overflow-y:auto;
+#side{position:absolute;top:52px;right:0;width:min(380px,100%);max-height:calc(100% - 64px);overflow-y:auto;
   display:block;background:var(--surface);border:1px solid var(--border-2);border-radius:8px;
   box-shadow:0 8px 24px rgba(15,27,61,.14);z-index:7}
 #side[hidden]{display:none}
@@ -493,7 +503,7 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 /* model */
 #tabModel{border-top:1px solid var(--border);padding-top:14px;gap:12px;min-height:380px}
 .model-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-#parseMsg{font-size:13px;color:var(--ink-2)}
+#parseMsg{font-size:13px;color:var(--ink-2);min-width:0;overflow-wrap:anywhere}
 #parseMsg .chip{font-family:var(--mono);font-size:12px;color:var(--good-ink)}
 #editorWrap{margin:0;border-radius:6px;border-color:var(--border-2)}
 #gutter{flex:none;min-width:44px;padding:12px 10px 12px 8px;text-align:right;font:13px/20px var(--mono);
@@ -554,7 +564,7 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 .pp-open{flex:1;min-width:0;display:flex;align-items:center;gap:10px;border:0;background:none;padding:0;
   text-align:left;cursor:pointer;color:inherit}
 .pp-txt{display:flex;flex-direction:column;min-width:0}
-.pp-nm{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pp-nm{font-size:14px;font-weight:600;overflow-wrap:anywhere}
 .pp-meta{font-size:12px;color:var(--muted)}
 .pp-del{border:0;background:none;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;padding:4px}
 .pp-del:hover{color:var(--crit)}
@@ -603,3 +613,61 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 .pp-bar label{display:flex;align-items:center;gap:8px;cursor:pointer}
 .pp-ask{color:var(--crit);font-size:12px}
 .pp-pick,.pp-bar input{width:16px;height:16px;flex:none;accent-color:var(--accent);cursor:pointer}
+
+/* ---- Agent layout (shell.mjs agentLayout): the conversation is the page; the model
+   (top) and the time course (bottom) share a resizable column on the right ---- */
+.layout-seg[hidden]{display:none}
+.seg-btns button[aria-pressed="true"]{background:var(--accent-soft);color:var(--ink);font-weight:600}
+#stage.agent #inspector{order:-1;flex:1;width:auto;min-width:360px;border-left:0;border-right:1px solid var(--border);background:var(--bg)}
+#stage.agent #viewWorkspace{flex:0 0 var(--rightW,42%);min-width:320px;max-width:70%}
+#stage.agent .side-grip{left:auto;right:-3px}
+/* the column is narrow: the title and meta rows shrink, the two panes stack */
+#stage.agent .doc-inner.wide{padding:14px 16px 12px}
+#stage.agent .doc-title h1{font-size:18px}
+#stage.agent .doc-meta{margin:4px 0 10px;font-size:12px}
+#stage.agent .doc-inner.split{grid-template-columns:minmax(0,1fr);
+  grid-template-rows:auto auto minmax(140px,var(--modelH,40%)) 14px minmax(180px,1fr)}
+#stage.agent .split>#tabModel{grid-area:3/1;min-height:0}
+#stage.agent .split>#splitGrip{grid-area:4/1;cursor:row-resize}
+#stage.agent .split>#tabSim{grid-area:5/1;min-height:0}
+#stage.agent .split-grip::after{left:0;right:0;top:6px;bottom:auto;width:auto;height:2px}
+#stage.agent .model-bar,#stage.agent .sim-bar{flex-wrap:wrap;row-gap:6px}
+/* a readable measure for the conversation in the middle */
+#stage.agent #msgs>.thread,#stage.agent #chat .ft{width:100%;max-width:860px;margin-inline:auto}
+#stage.agent #msgs{padding:20px 24px}
+#stage.agent .msg{font-size:14px;max-width:100%}
+#stage.agent .msg.me{max-width:80%}
+#stage.agent #chat .ft{border-top:0;padding:0 24px 18px}
+#stage.agent #ask{min-height:52px;border-radius:12px;font-size:14px}
+.layout-seg button{font-size:12.5px;height:28px;padding:0 12px}
+
+/* A narrow window must still expose every workspace control. Stack the document
+   and assistant, and scroll the stage instead of clipping a 900px-wide app. */
+@media (max-width:899px){
+  #app{min-width:0;width:100%}
+  #rail{overflow-y:auto}
+  .tabbar{flex-wrap:wrap;gap:0;padding:0 12px}
+  .tabset{height:44px}
+  .tabbar-r{width:100%;flex-wrap:wrap;gap:8px;padding-bottom:8px}
+  .tabbar-r .stat{flex:1 0 110px;max-width:none}
+  #stage{flex-direction:column;overflow-y:auto}
+  #stage>.view{flex:none;min-height:440px}
+  #stage #viewWorkspace,#stage.agent #viewWorkspace{width:100%;min-width:0;max-width:none;flex:none}
+  #stage #doc{overflow:visible}
+  #stage .doc-inner{padding:20px 16px 32px}
+  #stage .doc-inner.wide{height:auto;min-height:0;padding-bottom:16px}
+  #stage .doc-inner.split,#stage.agent .doc-inner.split{
+    grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto 300px 0 minmax(480px,auto)}
+  #stage .split>#tabModel,#stage.agent .split>#tabModel{grid-area:3/1;min-height:0}
+  #stage .split>#tabSim,#stage.agent .split>#tabSim{grid-area:5/1;min-height:0}
+  #stage #splitGrip,#stage .side-grip{display:none}
+  #stage #inspector,#stage.agent #inspector{order:0;flex:none;width:100%;min-width:0;height:560px;
+    border:0;border-top:1px solid var(--border)}
+  #viewFiles{flex-direction:column}
+  #viewFiles .fl-side{width:100%;height:220px;min-height:220px;border-right:0;border-bottom:1px solid var(--border)}
+  #viewFiles .fl-main{min-height:400px}
+  .home-new{flex-wrap:wrap}
+  .home-new .field{min-width:0;flex-basis:160px}
+  .meta-grid{grid-template-columns:minmax(90px,30%) minmax(0,1fr)}
+  #projPop{width:min(330px,calc(100vw - 76px))}
+}

@@ -2,7 +2,8 @@
    containers styled by the shell; this is what is inside them. */
 
 /* ------------------------------- Files ------------------------------- */
-.fl-side{width:280px;flex:none;display:flex;flex-direction:column;min-height:0;
+/* the list gives up width first when the assistant panel is dragged wider */
+.fl-side{width:clamp(180px,28%,280px);flex:none;display:flex;flex-direction:column;min-height:0;
          background:var(--panel);border-right:1px solid var(--border)}
 .fl-hd{padding:18px 16px 12px;border-bottom:1px solid var(--border)}
 .fl-hd-row{display:flex;align-items:baseline;gap:8px}
@@ -25,10 +26,12 @@
 .fl-err{color:var(--warn-ink)}
 
 .fl-main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
-.fl-bar{height:56px;flex:none;display:flex;align-items:center;gap:12px;padding:0 24px;
+/* one row when there is room; the buttons wrap under the file name when there is not,
+   rather than squeezing the name to nothing */
+.fl-bar{min-height:56px;flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 24px;
         border-bottom:1px solid var(--border)}
 .fl-bar[hidden],.fl-editor[hidden],.fl-preview[hidden],.fl-blank[hidden],.fl-note[hidden]{display:none}
-.fl-cur{min-width:0;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl-cur{flex:1 1 140px;min-width:0;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fl-meta,.fl-status{flex:none;font-size:12px;color:var(--muted);white-space:nowrap}
 .fl-status{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .fl-status.dirty{color:var(--warn-ink)}

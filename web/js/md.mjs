@@ -103,30 +103,60 @@ export const sanitizeSvg  = src => sanitize(src, TAG_OK, ATTR_OK);
 export const sanitizeHtml = src => sanitize(src, HTAG_OK, HATTR_OK);
 
 /* ---------------------------------- tex ---------------------------------- */
-/* Nothing here renders maths, and a model reaches for \( \) and \frac the moment it
-   writes an equation, so the delimiters and the handful of commands that actually
-   turn up become plain text in backticks — backticks because the stripped form is
-   full of `_` and `^`, which markdown would otherwise read as emphasis.
-   `$…$` is deliberately left alone: in Antimony `$X0` is a boundary species. */
-const TEX = [
-  [/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '($1)/($2)'],
-  [/\\(?:text|mathrm|mathbf|operatorname)\s*\{([^{}]*)\}/g, '$1'],
-  [/\\(?:left|right|big|Big|displaystyle)\b/g, ''],
-  [/\\cdot\b/g, '\u00b7'], [/\\times\b/g, '\u00d7'], [/\\approx\b/g, '\u2248'],
-  [/\\(?:leq|le)\b/g, '\u2264'], [/\\(?:geq|ge)\b/g, '\u2265'],
-  [/\\(?:to|rightarrow)\b/g, '\u2192'],
-  [/\\[,;:!]/g, ' '],
-  [/\\([A-Za-z]+)/g, '$1'],          // any command left: keep the word, drop the slash
-  [/[{}`]/g, ''],                     // C^J_{1} -> C^J_1; a backtick would break the span
-];
-const MATH = /\\\(([\s\S]*?)\\\)|\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$/g;
+/* Maths is rendered by MathJax (loaded from a CDN in index.html, so absent under
+   `node --test`, offline, or for a moment at startup: latex.mjs upgrades what was
+   left as source once it loads). Every span is held before markdown runs, so `_`
+   and `*` inside it are never read as emphasis. Inline code spans are matched
+   first and given back untouched, so `$x$` in backticks stays code. A single `$`
+   is a delimiter only in the pandoc shape — no space just inside either `$`, no
+   digit right after the closing one — so Antimony's `$X0 -> S1; $X1` and "$5 to
+   $10" stay text. A bare \begin{align}…\end{align} (and kin) is display maths. */
+const MATH = /(`+)[\s\S]*?\1|\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|(?<![\\$\w])\$(?![\s$])([^$\n]*?[^\s\\$])\$(?![\d$])|(\\begin\{(equation|align|alignat|gather|multline|flalign|eqnarray|CD)\*?\}[\s\S]*?\\end\{\7\*?\})/g;
 
-export function detex(src) {
-  return String(src ?? '').replace(MATH, (m, a, b, c) => {
-    const t = TEX.reduce((s, [re, to]) => s.replace(re, to), a ?? b ?? c).trim();
-    return t ? '`' + t + '`' : '';
+function tex(src, display) {
+  const mj = globalThis.MathJax;
+  if (!mj?.tex2svg) return null;
+  try { return mj.tex2svg(src, { display }).outerHTML; }
+  catch { return null; }
+}
+
+function math(s, hold) {
+  return s.replace(MATH, (m, code, dd, br, pa, d, env) => {
+    if (code) return m;
+    const display = pa == null && d == null;
+    const src = (env ?? dd ?? br ?? pa ?? d).trim();
+    // inline maths gets its own marker so a line of it is still a paragraph
+    return hold(tex(src, display) ?? '<span class="math-src" data-tex="' + esc(src) + '"' +
+                (display ? ' data-display' : '') + '>' + esc(m) + '</span>', !display);
   });
 }
+
+/* Text-mode LaTeX — a closed ```latex fence, or a bare tabular/itemize/… block —
+   becomes a <latex-doc> element that latex.mjs has compiled by real LaTeX. Its text
+   is the escaped source, which is also what shows until then, or if it fails. */
+const LATEX_DOC = /(`+)[\s\S]*?\1|(?:\\documentclass[\s\S]*?)?\\begin\{(document|tabular|tabularx|itemize|enumerate|description|center|quote|quotation|verse|flushleft|flushright|verbatim|minipage|table|figure|tikzpicture)\*?\}[\s\S]*?\\end\{\2\*?\}/g;
+const latexDoc = src => '<latex-doc>' + esc(src) + '</latex-doc>';
+
+/* ------------------------------ live diagrams ------------------------------ */
+/* A closed ```html fence is an interactive diagram: hover, sliders, clickable
+   nodes, d3 or Plotly. It runs, with its scripts, in an iframe sandboxed to an
+   opaque origin (no allow-same-origin), so it cannot touch the app's page,
+   storage or cookies; its CSP lets scripts come only from inline or the two CDNs
+   and blocks fetch, forms and every other way out, so it cannot reach this app's
+   server either. It reports its height to latex.mjs so the frame fits it. */
+export const LIVE_CSP = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " +
+  "style-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://fonts.googleapis.com; " +
+  "font-src https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net data:; img-src data: blob:; " +
+  "connect-src 'none'; form-action 'none'; base-uri 'none'";
+const LIVE_HEAD = '<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + LIVE_CSP + '">' +
+  '<style>html{margin:0;padding:0}body{margin:0;padding:8px;font:13px system-ui,sans-serif;color:#1d1d1f;background:#fff;overflow-x:auto}</style>';
+// on load as well as on resize: a page in a background tab does no resize observing
+// the body's own height, not the document's (that is never less than the frame)
+const LIVE_SIZE = '<script>{const b=document.body,s=()=>parent.postMessage({mcaLive:Math.ceil(b.getBoundingClientRect().height)+2},"*");' +
+  'addEventListener("load",s);document.addEventListener("visibilitychange",s);new ResizeObserver(s).observe(b)}<\/script>';
+export const liveDoc = code => '<!doctype html><html><head>' + LIVE_HEAD + '</head><body>' + code + LIVE_SIZE + '</body></html>';
+const liveFrame = code => '<div class="md-live"><iframe sandbox="allow-scripts" title="Interactive diagram" loading="lazy" srcdoc="' +
+  esc(liveDoc(code)) + '"></iframe></div>';
 
 /* --------------------------------- inline --------------------------------- */
 
@@ -192,24 +222,29 @@ function table(lines, i, out) {
 }
 
 /** renderMarkdown(src) -> HTML string, safe to assign to innerHTML. */
-export function renderMarkdown(src) {
+export function renderMarkdown(src, held) {
   // Fences and SVG come out before anything else: their contents must not be
   // read as markdown, and the placeholder survives escaping untouched.
-  const held = [];
-  const hold = html => '\uE000' + (held.push(html) - 1) + '\uE000';
+  // A blockquote recurses with the outer `held`, so its placeholders survive.
+  const top = !held;
+  held ??= [];
+  const hold = (html, inl) => { const c = inl ? '\uE001' : '\uE000'; return c + (held.push(html) - 1) + c; };
 
-  let s = String(src ?? '').replace(/\r\n?/g, '\n').replace(/\uE000/g, '');
+  let s = String(src ?? '').replace(/\r\n?/g, '\n');
+  if (top) s = s.replace(/[\uE000\uE001]/g, '');
 
   /* Some models wrap the whole reply in a ```markdown fence. Taken literally that
      is a request to show the answer as source, which is never what was meant. */
   const whole = /^\s*```(?:markdown|md)\s*\n([\s\S]*?)```\s*$/i.exec(s);
   if (whole) s = whole[1];
 
-  s = s.replace(/```(\w*)\n?([\s\S]*?)(?:```|$)/g, (_, lang, code) =>
+  s = s.replace(/```(\w*)\n?([\s\S]*?)(```|$)/g, (_, lang, code, shut) => shut && /^(?:la)?tex$/i.test(lang) ? hold(latexDoc(code)) :
+    shut && /^html$/i.test(lang) ? hold(liveFrame(code)) :
     hold('<pre><code' + (lang ? ' class="lang-' + esc(lang) + '"' : '') + '>' +
          esc(code.replace(/\n$/, '')) + '</code></pre>'));
 
-  s = detex(s);            // after the fences: TeX inside a code block stays literal
+  s = s.replace(LATEX_DOC, (m, code) => code ? m : hold(latexDoc(m)));   // code spans stay code
+  s = math(s, hold);       // after the fences: TeX inside a code block stays literal
 
   s = s.replace(/<svg[\s\S]*?(?:<\/svg\s*>|$)/gi, m =>
     hold('<figure class="md-svg">' + sanitizeSvg(m) + '</figure>'));
@@ -234,7 +269,7 @@ export function renderMarkdown(src) {
     if (/^ {0,3}>/.test(l)) {
       const q = [];
       while (i < lines.length && /^ {0,3}>/.test(lines[i])) q.push(lines[i++].replace(/^ {0,3}>\s?/, ''));
-      out.push('<blockquote>' + renderMarkdown(q.join('\n')) + '</blockquote>');
+      out.push('<blockquote>' + renderMarkdown(q.join('\n'), held) + '</blockquote>');
       continue;
     }
     if (l.includes('|') && SEP.test(lines[i + 1] ?? '')) { i = table(lines, i, out); continue; }
@@ -246,5 +281,7 @@ export function renderMarkdown(src) {
     out.push('<p>' + inline(p.join('\n')).replace(/\n/g, '<br>') + '</p>');
   }
 
-  return out.join('\n').replace(/\uE000(\d+)\uE000/g, (_, n) => held[+n] ?? '');
+  // held HTML can itself hold placeholders (math inside an HTML table)
+  const restore = h => h.replace(/[\uE000\uE001](\d+)[\uE000\uE001]/g, (_, n) => restore(held[+n] ?? ''));
+  return top ? restore(out.join('\n')) : out.join('\n');
 }

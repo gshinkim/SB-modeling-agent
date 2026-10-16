@@ -33,13 +33,14 @@ const stub = createServer((req, res) => {
     const call = (name, args) => ({ tool_calls: [{ index: 0, id: 'c' + step, type: 'function',
       function: { name, arguments: JSON.stringify(args) } }] });
     const delta = skill ? call('load_skill', { name: skill })
-      : step === 4 ? call('write_file', { path: join(WORK, SID, 'model.txt'), content: NEW_MODEL })
+      : step === 4 ? call('read_file', { path: 'skills/pathway-modeling/references/02_kinetics_in_a_nutshell.md' })
+      : step === 5 ? call('write_file', { path: join(WORK, SID, 'model.txt'), content: NEW_MODEL })
       : { content: 'Changed k to 7.' };
     // the answer after the write takes a while, as a real model's does
     setTimeout(() => {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.end('data: ' + JSON.stringify({ choices: [{ delta }] }) + '\n\ndata: [DONE]\n\n');
-    }, step === 5 ? 2000 : 0);
+    }, step === 6 ? 2000 : 0);
   });
 });
 await new Promise(r => stub.listen(0, '127.0.0.1', r));

@@ -135,3 +135,29 @@ const on = { enabled: true, key: 'sk-test', auto: true };
   assert.equal(d.auto.length, 3); assert.equal(d.hint.length, 0);
   console.log('router auto cap ok');
 }
+
+// building or changing a model always routes pathway-modeling, whatever the provider
+// scored, even if the provider fails (measured: it routed tellurium + mca, not it)
+{
+  const { MODEL_ASK } = await import('./router.mjs');
+  const low = async () => new Response(JSON.stringify({ answers: {
+    tellurium: { type: 'noul', noul: 0.95 }, mca: { type: 'noul', noul: 0.9 },
+    'pathway-modeling': { type: 'noul', noul: 0.1 } } }));
+  const r = await route({ cfg: on, root: ROOT, request: 'Build a model of a linear three-step pathway', fetch: low });
+  assert.deepEqual(r.auto.map(a => a[0]), ['pathway-modeling', 'tellurium', 'mca']);
+  const failed = await route({ cfg: on, root: ROOT, request: 'Add negative feedback from S3 onto the first enzyme',
+                               fetch: async () => new Response('no', { status: 500 }) });
+  assert.deepEqual(failed.auto, [['pathway-modeling', 1]]);
+  assert.ok(failed.error);
+  const done = await route({ cfg: on, root: ROOT, request: 'Change the rate law of J2', loaded: ['pathway-modeling'], fetch: low });
+  assert.ok(!done.auto.some(a => a[0] === 'pathway-modeling'), 'once loaded it is not forced again');
+  const ask = await route({ cfg: on, root: ROOT, request: 'Which step controls the flux?', fetch: low });
+  assert.ok(!ask.auto.concat(ask.hint).some(a => a[0] === 'pathway-modeling'), 'a control question is not a model change');
+  for (const q of ['Write me an Antimony model of glycolysis', 'Change the rate law of J2 to reversible mass action',
+                   'Add a conserved moiety ATP/ADP to the model', 'Set up a stochastic version of this model',
+                   'Make a toggle switch model with two mutually repressing genes', 'modify the Km of the second step'])
+    assert.match(q, MODEL_ASK, q);
+  for (const q of ['What is a stoichiometry matrix?', 'Compute the flux control coefficients', 'Explain this model'])
+    assert.doesNotMatch(q, MODEL_ASK, q);
+  console.log('ok (model asks force pathway-modeling)');
+}

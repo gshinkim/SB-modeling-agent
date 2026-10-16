@@ -1,10 +1,11 @@
 import { readFile, writeFile, readdir, mkdir, lstat, realpath } from 'node:fs/promises';
-import { join, resolve, relative, dirname, sep } from 'node:path';
+import { join, resolve, relative, dirname, basename, sep } from 'node:path';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { Readable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
 import { readCompletion, resultCap, CONTEXT_DEFAULT, replyTokens, stepBudget, antimonyHint,
          callTool, userQuestion, v1Base, completion, runTurn, runStage, hostWorkflow,
          withWorkflow } from '../web/js/oai.mjs';
@@ -76,20 +77,24 @@ export class Chat {
        also fit the request to memory itself (measured, MLX: asked 131072, loaded
        118016), so the window is read back rather than assumed. Already loaded: its
        real window wins over any setting. */
-    const info = () => ask('/api/v0/models/' + encodeURIComponent(this.model)).catch(() => ({}));
+    const optional = e => {
+      if (signal?.aborted) throw signal.reason;
+      return {};
+    };
+    const info = () => ask('/api/v0/models/' + encodeURIComponent(this.model)).catch(optional);
     const lm = await info();
     if (lm.max_context_length > 0) {
       if (lm.state === 'loaded' && lm.loaded_context_length > 0) { this.ctx = lm.loaded_context_length; this.detected = 2; return; }
       // Already loading (LM Studio's own JIT, or another turn): a second load made a second
       // instance, "model:2", 37 GB beside the first. Wait for the one under way instead.
       for (let i = 0, m = lm; m.state === 'loading' && i < 300; i++) {
-        await new Promise(r => setTimeout(r, 1000)); m = await info();
+        await delay(1000, undefined, { signal }); m = await info();
         if (m.state === 'loaded' && m.loaded_context_length > 0) { this.ctx = m.loaded_context_length; this.detected = 2; return; }
       }
       // ponytail: halving search, each refusal costs one load attempt; ask LM Studio for its own estimate if that gets slow
       for (let want = Math.min(this.ctxSet ? this.ctx : Infinity, lm.max_context_length); ; want = Math.floor(want / 2)) {
         const r = await ask('/api/v1/models/load', { model: this.model, context_length: want }, 300000)
-          .catch(() => ({}));
+          .catch(optional);
         if (r.status === 'loaded') { this.ctx = (await info()).loaded_context_length || want; this.detected = 2; return; }
         if (want <= LMSTUDIO_LOAD_CTX) break;
       }
@@ -151,14 +156,16 @@ const LMSTUDIO_LOAD_CTX = 32768;
 function post(url, headers, body, signal, method = 'POST') {
   return new Promise((resolve, reject) => {
     const req = (url.startsWith('https:') ? httpsRequest : httpRequest)(url,
-      { method, headers, signal, autoSelectFamily: true }, res => resolve({
-        ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode,
-        // Lazy: eagerly calling Readable.toWeb(res) attaches a 'data' consumer, so
-        // any await before text() reads it made text() come back empty — both
-        // current callers read text() right away, but a future one would not.
-        get body() { return Readable.toWeb(res); },
-        text: async () => { let s = ''; for await (const c of res) s += c; return s; },
-      }));
+      { method, headers, signal, autoSelectFamily: true }, res => {
+        let webBody;
+        resolve({
+          ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode,
+          // Lazy and memoized: even an existence check must not attach a second
+          // data consumer that buffers the whole stream without ever being read.
+          get body() { return webBody ??= Readable.toWeb(res); },
+          text: async () => { let s = ''; for await (const c of res) s += c; return s; },
+        });
+      });
     req.on('error', reject);
     req.end(body);
   });
@@ -175,24 +182,34 @@ const apiHint = stderr => /AttributeError|ImportError|ModuleNotFoundError|NameEr
     'another attribute name will fail the same way.'
   : '';
 
-/* Building or changing the model needs the pathway-modeling Skill (rate laws,
-   stoichiometry), loaded before tellurium; every other Skill is only recommended.
-   A refusal repeated counts toward the repeat guard. */
-export const modelGate = (run, loaded, isModelWrite) => {
-  if (!isModelWrite || loaded.has('pathway-modeling')) return null;
+/* Like the Claude hook, building or changing the model requires both the Skill's
+   index and an actual reference read. A refusal counts toward the repeat guard. */
+export const modelGate = (run, loaded, isModelWrite, references = new Set()) => {
+  if (!isModelWrite || loaded.has('pathway-modeling') && references.size > 0) return null;
   if (run.refused) run.repeats++; else run.refused = true;
-  return 'REFUSED — building or changing the model needs the pathway-modeling Skill. ' +
-         'Call load_skill("pathway-modeling") first, then load_skill("tellurium") for the ' +
-         'Antimony syntax, then call write_file again.';
+  return 'REFUSED — building or changing the model needs the pathway-modeling Skill, used, not just loaded. ' +
+         'Call load_skill("pathway-modeling"), then read_file the reference files its routing table ' +
+         'points to for this change (under skills/pathway-modeling/references/). ' +
+         'SKILL.md alone and unsuccessful or empty reads do not count. Call load_skill("tellurium") ' +
+         'for the Antimony syntax, then call write_file again.';
 };
 
 function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'workspace/runs'),
-                   modelPath = DEFAULT_MODEL_PATH, loaded = new Set()) {
+                   modelPath = DEFAULT_MODEL_PATH, loaded = new Set(), signal, references = new Set()) {
   // The project is readable because the Skills and the live model live there; the
   // scratch folder is the user's own and is the only other place in play. A bare
   // startsWith(root) also passes a sibling directory whose name has root as a
   // string prefix (root-evil/x), so every comparison requires the separator too.
   const inside = (abs, dir) => abs === dir || abs.startsWith(dir + sep);
+  const identity = async abs => {
+    let probe = abs;
+    const tail = [];
+    while (!(await lstat(probe).catch(() => null))) {
+      tail.unshift(basename(probe));
+      probe = dirname(probe);
+    }
+    return resolve(await realpath(probe), ...tail);
+  };
   const jail = async p => {
     let abs = resolve(root, p || '.');
     // "/workspace/x" meant the project root — measured: bonsai-27b spent 7 of 14
@@ -212,6 +229,8 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
     return abs;
   };
   const py = join(root, VENV_PY);
+  const modelFile = resolve(root, modelPath);
+  const isModelAbs = async abs => await identity(abs) === await identity(modelFile);
 
   const impl = {
     async load_skill({ name }) {
@@ -243,19 +262,28 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
       const t = asText(await readFile(abs));
       if (t == null) return 'ERROR: ' + path + ' is not text (an image or other binary file), so it cannot be read ' +
         'this way. An image the user attached is already shown to you in their message: look at it there.';
-      return part(t);
+      const result = part(t);
+      // Only text that was successfully returned from this project's real
+      // pathway-modeling reference directory satisfies the scientific gate.
+      if (result.trim()) {
+        const refRoot = await realpath(join(root, 'skills/pathway-modeling/references')).catch(() => null);
+        const real = await realpath(abs).catch(() => null);
+        if (refRoot && real && inside(real, refRoot) && real.endsWith('.md')) references.add(real);
+      }
+      return result;
     },
     async write_file({ path, content }) {
       const abs = await jail(path);
+      const isModel = await isModelAbs(abs);
       // Being inside the project was not a limit at all: write_file could overwrite
       // backend/*.mjs, .claude/settings.json or a Skill. Only the live model and the
       // user's own working folder are legitimate write targets.
-      if (!inside(abs, scratch) && abs !== join(root, modelPath))
+      if (!inside(abs, scratch) && !isModel)
         throw new Error('write_file may only write the live model (' + modelPath + ') or into the working folder (' + scratch + '): ' + path);
       // The live model is the text in the user's editor. Antimony that does not load
       // would replace it with something broken they cannot get back, so it is checked
       // first — the same gate web/js/agent.mjs already applies to write_model.
-      if (te && abs === join(root, modelPath)) {
+      if (te && isModel) {
         const r = await te.call('info', { model: String(content ?? '') });
         if (!r.ok) return 'REJECTED — that Antimony does not load: ' + r.error +
           '\nThe live model is unchanged. Fix it and call write_file again.' + antimonyHint('read_file');
@@ -278,10 +306,10 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
       return await new Promise(res => {
         // cwd is the scratch folder, so anything the script writes by a relative
         // path lands with the user's other work rather than in the install
-        execFile(py, [file], { cwd: scratch, env: PY_ENV, timeout: 180000, maxBuffer: 8e6 },
+        execFile(py, [file], { cwd: scratch, env: PY_ENV, signal, timeout: 180000, maxBuffer: 8e6 },
           (err, out, errOut) => res(
             ((out || '') + (errOut ? '\n[stderr]\n' + errOut : '') +
-             (err && !out && !errOut ? '\n[failed] ' + err.message : '') || '(no output)')
+             (err ? '\n[failed] ' + err.message : '') || '(no output)')
             + apiHint(errOut)));
       });
     },
@@ -303,8 +331,11 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
   ];
 
   return {
-    impl, loaded,
-    isModel: p => resolve(root, p || '.') === join(root, modelPath),
+    impl, loaded, references,
+    isModel: async p => {
+      try { return await isModelAbs(await jail(p)); }
+      catch { return false; } // the tool reports path errors; they must not fail the turn
+    },
     defs: schemas.map(([name, description, properties, required]) => ({
       type: 'function',
       function: { name, description, parameters: { type: 'object', properties, required } },
@@ -356,8 +387,8 @@ const dispatcher = (rt, tools, messages, emit, cap) => {
       if (rt.fn && (!step || bad || tools.loaded.size > had)) await steer(rt, tools, messages, recent, step, emit, cap);
       bad = false; had = tools.loaded.size;
     },
-    gate: (name, args, run) => reload(messages, name, args) ??
-      modelGate(run, tools.loaded, name === 'write_file' && tools.isModel(args.path)),
+    gate: async (name, args, run) => reload(messages, name, args) ??
+      modelGate(run, tools.loaded, name === 'write_file' && await tools.isModel(args.path), tools.references),
     ran(name, args, out) { recent.push(recentLine(name, args, out)); bad ||= failed(recent.at(-1)); },
   };
 };
@@ -366,9 +397,9 @@ const names = tools => tools.defs.map(d => d.function.name);
 
 /* --------------------------- the workflow, verbatim --------------------------- */
 export async function runWorkflowFile({ root, chat, args, emit, signal, te, scratch,
-                                        modelPath = DEFAULT_MODEL_PATH, loaded, rt = {} }) {
+                                        modelPath = DEFAULT_MODEL_PATH, loaded, references, rt = {} }) {
   const cap = resultCap(chat.ctx, chat.resultPct);
-  const tools = makeTools(root, emit, te, cap, scratch, modelPath, loaded);
+  const tools = makeTools(root, emit, te, cap, scratch, modelPath, loaded, signal, references);
   return hostWorkflow({
     src: await readFile(join(root, 'workflows/mca-tellurium.js'), 'utf8'), args, emit,
     system: localSystem({ tools: names(tools), liveModel: args?.model ?? '', modelPath,
@@ -442,12 +473,12 @@ export function runLocalAgent({ root, prompt, images, history = [], chatCfg, use
       // whose real window was smaller or larger.
       await chat.detectContext(ctrl.signal);
       const cap = resultCap(chat.ctx, chat.resultPct);
-      const tools = makeTools(root, emit, te, cap, scratch, modelPath);
+      const tools = makeTools(root, emit, te, cap, scratch, modelPath, undefined, ctrl.signal);
 
       // Off means off: with the workflow switched off the tool is not there to call at all.
       const allTools = !useWorkflow ? tools : withWorkflow(tools, { prompt, emit, cap,
         run: async a => runWorkflowFile({
-          root, chat, emit, te, scratch, modelPath, loaded: tools.loaded, signal: ctrl.signal, rt,
+          root, chat, emit, te, scratch, modelPath, loaded: tools.loaded, references: tools.references, signal: ctrl.signal, rt,
           args: { ...a, model: await readFile(join(root, modelPath), 'utf8').catch(() => ''),
                   workdir: scratch, exec: EXEC_NOTE },
         }) });

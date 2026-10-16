@@ -60,6 +60,15 @@ if [ "${SKIP_LAYLA:-}" != 1 ]; then
   fi
 fi
 
+# Tectonic: real LaTeX for the assistant's ```latex blocks. One binary in .tools/, from
+# Tectonic's own installer; it fetches the TeX packages it needs on first use.
+# SKIP_TECTONIC=1 leaves it out; those blocks then show as source.
+if [ "${SKIP_TECTONIC:-}" != 1 ] && ! command -v tectonic >/dev/null 2>&1 && [ ! -e .tools/tectonic ] && [ ! -e .tools/tectonic.exe ]; then
+  mkdir -p .tools
+  (cd .tools && curl --proto '=https' --tlsv1.2 -fsSL https://drop-sh.fullyjustified.net | sh) ||
+    echo "WARNING: could not install Tectonic. Rerun ./setup.sh to try again; LaTeX blocks show as source until then."
+fi
+
 command -v claude >/dev/null 2>&1 || echo "NOTE: the 'claude' CLI is not on PATH, so the AI panel will not run yet.
       Install it (https://code.claude.com/docs/en/setup), then run  claude  once to log in."
 echo "Setup complete.  Start with:  ./run.sh"

@@ -211,3 +211,23 @@ test('attachments: saved by plain name, never over a file; text and PDF text sho
   assert.match(local, /file: kept at .*not a text file/);
   assert.equal(attachmentNote([], true), '');
 });
+
+test('attachments refuse an escaping directory and corrupt data before writing', async () => {
+  const r = await mkdtemp(join(base, 'att-link-'));
+  await symlink(outside, join(r, 'attachments'), 'junction');
+  await refuses(saveAttachments(r, [{ name: 'escape.txt', data: Buffer.from('escape').toString('base64') }]));
+  assert.equal(existsSync(join(outside, 'escape.txt')), false);
+  await refuses(saveAttachments(root, null), /attachments must be an array/);
+  await refuses(saveAttachments(root, [{ name: 'ok.txt', data: 'b2s=' }, { name: 'broken.txt', data: '%%%'}]), /base64/);
+  assert.equal(existsSync(join(root, 'attachments/ok.txt')), false, 'a corrupt batch saves nothing');
+});
+
+test('parallel attachments with the same name keep every upload', async () => {
+  const r = await mkdtemp(join(base, 'att-race-'));
+  const contents = Array.from({ length: 12 }, (_, i) => 'upload ' + i);
+  const files = (await Promise.all(contents.map(text => saveAttachments(r,
+    [{ name: 'same.txt', data: Buffer.from(text).toString('base64') }])))).flat();
+  assert.equal(new Set(files.map(f => f.path)).size, contents.length);
+  const stored = await Promise.all(files.map(f => readFile(f.path, 'utf8')));
+  assert.deepEqual(stored.sort(), [...contents].sort());
+});

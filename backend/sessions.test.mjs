@@ -195,6 +195,44 @@ console.log('sessions empty-model guard ok');
 console.log('sessions rename retry ok');
 
 {
+  const { mkdtemp, mkdir, stat: st, readFile: rf, writeFile: wf, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { saveSession, listSessions } = await import('./sessions.mjs');
+  const work = await mkdtemp(join(tmpdir(), 'mca-rename-'));
+  try {
+    await mkdir(join(work, 'runs'));
+    await saveSession(work, { id: 'original', name: 'original', model: 'keep' });
+    const renamed = await saveSession(work, { id: 'original', name: 'runs' });
+    assert.equal(renamed.id, 'runs-2', 'renaming must never replace an existing empty folder');
+    assert.ok((await st(join(work, 'runs'))).isDirectory(), 'scratch survives');
+    assert.deepEqual((await listSessions(work)).map(s => s.id), ['runs-2']);
+
+    // Two requests from the same page may overlap while the folder moves. Both
+    // must resolve to the same project instead of failing or recreating its old id.
+    const [first, last] = await Promise.all([
+      saveSession(work, { id: 'runs-2', name: 'renamed', chats: [{ id: 1, log: [] }] }),
+      saveSession(work, { id: 'runs-2', name: 'renamed', chats: [{ id: 2, log: [{ q: 'last' }] }] }),
+    ]);
+    assert.equal(first.id, last.id);
+    assert.equal(last.id, 'renamed');
+    assert.deepEqual((await listSessions(work)).map(s => s.id), ['renamed']);
+    assert.equal(JSON.parse(await rf(join(work, 'renamed/session.json'), 'utf8')).chats[0].id, 2);
+    assert.equal(await rf(join(work, 'renamed/model.txt'), 'utf8'), 'keep');
+    assert.equal((await saveSession(work, { id: 'renamed' })).id, 'renamed', 'omitted name preserves the project name');
+    assert.equal(JSON.parse(await rf(join(work, 'renamed/session.json'), 'utf8')).chats[0].id, 2,
+      'rename-only saves preserve the conversation');
+    await assert.rejects(saveSession(work, { id: 'renamed', chats: {} }), /chats/);
+    assert.ok(Array.isArray(JSON.parse(await rf(join(work, 'renamed/session.json'), 'utf8')).chats));
+    await mkdir(join(work, 'corrupt'));
+    await wf(join(work, 'corrupt/session.json'), '{"name":"corrupt", "chats":{}}');
+    assert.deepEqual((await listSessions(work)).map(s => s.id), ['renamed'],
+      'one malformed session must not break every project in the picker');
+  } finally { await rm(work, { recursive: true, force: true }); }
+}
+
+console.log('sessions reserved folders and overlapping saves ok');
+
+{
   const { mkdtemp, writeFile: wf2, readFile: rf } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { turnLines, parseHistory, renderHistory, foldHistory, appendHistory, saveSession,

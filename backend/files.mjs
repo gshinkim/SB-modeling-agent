@@ -168,14 +168,30 @@ export const pdfText = (py, path) => new Promise((ok, no) => execFile(py, ['-c',
 export const asText = buf => buf.includes(0) ? null : buf.toString('utf8');
 
 export async function saveAttachments(root, attachments = [], py) {
-  const dir = join(root, 'attachments'), out = [];
+  if (!Array.isArray(attachments)) throw bad('attachments must be an array');
+  // Validate the whole batch before writing any files. Buffer.from silently drops
+  // invalid base64 characters, which otherwise turns a corrupt upload into a saved file.
+  for (const a of attachments.slice(0, 10)) {
+    if (!a || typeof a !== 'object' || typeof a.data !== 'string' ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(a.data))
+      throw bad('attachment data must be base64');
+  }
+  const out = [];
   for (const a of attachments.slice(0, 10)) {
     const name = String(a?.name ?? '').split(/[\\/]/).pop().replace(/[^\w.\- ]+/g, '_').replace(/^\.+/, '').slice(0, 80) || 'file';
-    await mkdir(dir, { recursive: true });
-    let path = join(dir, name);
-    for (let i = 2; existsSync(path); i++) path = join(dir, i + '-' + name);
-    const buf = Buffer.from(String(a?.data ?? ''), 'base64');
-    await writeFile(path, buf);
+    // The attachment directory is agent-editable too: apply the same containment
+    // check as the Files API before following it, including dangling symlinks.
+    await safePath(root, 'attachments/' + name);
+    await mkdir(join(root, 'attachments'), { recursive: true });
+    const buf = Buffer.from(a.data, 'base64');
+    let path;
+    for (let i = 1; ; i++) {
+      const rel = 'attachments/' + (i === 1 ? name : i + '-' + name);
+      await safePath(root, rel);
+      path = join(root, rel);
+      try { await writeFile(path, buf, { flag: 'wx' }); break; }
+      catch (e) { if (e.code !== 'EEXIST') throw e; }
+    }
     if (SEEN.test(a?.type)) out.push({ name, path, kind: 'image', url: `data:${a.type};base64,${a.data}` });
     else if (/\.pdf$/i.test(name) || a?.type === 'application/pdf')
       out.push({ name, path, kind: 'pdf', ...await pdfText(py, path).then(text => ({ text }), e => ({ error: e.message })) });

@@ -38,16 +38,14 @@ export async function startTurn({ message, sessionId, sessionDirId, model, env, 
                                   scratchDir, useWorkflow = true, resume = false, router: routerCfg,
                                   attachments, chat },
                                 { root, work, te, editorEcho, eject, summarise, awake, run = runTurn }) {
-  if (!message?.trim()) throw bad('message is empty');
+  if (typeof message !== 'string' || !message.trim()) throw bad('message is empty');
   const local = runtime === 'openai';
   // A misconfigured endpoint used to surface in the browser as a bare "network
   // error"; say what is actually wrong, over SSE, so the chat can show it.
-  if (local && !chatCfg?.baseUrl)
+  if (local && (typeof chatCfg?.baseUrl !== 'string' || !chatCfg.baseUrl.trim()))
     throw bad('No server URL for this model. Open Settings → Local models, set the URL ' +
       '(Ollama: http://localhost:11434, LM Studio: http://localhost:1234), press ' +
       '"Test & list models", then Save.');
-  // a model picked mid-session: free the GPU of the one it replaces before loading this one
-  if (local) await eject(chatCfg.baseUrl, chatCfg.model).catch(() => {});
   const folder = q => rootFor(q, { work, runs: join(work, 'runs'), resolveScratch });
   // The project's own folder is where its memory (history.md) and its scratch live.
   let sdir = null, scratch;
@@ -70,6 +68,10 @@ export async function startTurn({ message, sessionId, sessionDirId, model, env, 
   const said = !att.length ? message : message + '\n\n[attached: ' + att.map(f => f.path).join(', ') + ']';
   const ask = message + attachmentNote(att, local);
 
+  // Refused requests must never unload a running model. Validate the folders and
+  // save the attachments before touching any local runtime.
+  if (local) await eject(chatCfg.baseUrl, chatCfg.model).catch(() => {});
+
   const held = awake();
   // history.md's summaries are written by the model the user is already using
   const sum = local ? p => summarise.local(chatCfg, p) : p => summarise.claude(model, p);
@@ -78,12 +80,14 @@ export async function startTurn({ message, sessionId, sessionDirId, model, env, 
   // no longer stops it. The turn itself — watcher, event queue, history, end-of-turn
   // ordering — is turn.mjs.
   const key = sessionDirId || '';
-  startLive(key, { q: message, chat, files: att.map(f => f.name), at: Date.now() }, (emit, end) => run({
-    root, sdir, mfile, scratch, message: said, ask, routerCfg, runtime, editorEcho, emit,
-    agent: local ? runLocalAgent : runAgent,
-    args: { sessionId, model, env: env || {}, chatCfg, useWorkflow, resume, te, images: att.filter(f => f.kind === 'image').map(f => f.url) },
-    compact: (s, batch) => sum(compactPrompt(s, batch)),
-    shorten: thinking => sum(thinkingPrompt(thinking)),
-    end: () => { held?.kill(); end(); } }));
+  try {
+    startLive(key, { q: message, chat, files: att.map(f => f.name), at: Date.now() }, (emit, end) => run({
+      root, sdir, mfile, scratch, message: said, ask, routerCfg, runtime, editorEcho, emit,
+      agent: local ? runLocalAgent : runAgent,
+      args: { sessionId, model, env: env || {}, chatCfg, useWorkflow, resume, te, images: att.filter(f => f.kind === 'image').map(f => f.url) },
+      compact: (s, batch) => sum(compactPrompt(s, batch)),
+      shorten: thinking => sum(thinkingPrompt(thinking)),
+      end: () => { held?.kill(); end(); } }));
+  } catch (e) { held?.kill(); throw e; }
   return key;
 }

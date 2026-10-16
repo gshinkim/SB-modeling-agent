@@ -165,6 +165,9 @@ export function buildReport(s){
       [r.id, p4(r.conc), r.boundary ? 'fixed' : p4(r.rate), r.boundary ? 'Boundary' : 'Floating'])), '');
     out.push(`Solver residual ${ok(d.distance) ? d.distance.toExponential(2) : 'n/a'}; ` +
       (ok(st.maxRealPart) ? `max Re(lambda) ${p4(st.maxRealPart)}; ` : '') + stabilityWord(st) + '.', '');
+    const eig = eigenRows(st);
+    if(eig.length) out.push('Jacobian eigenvalues:', '', mdTable(['Eigenvalue', 'Re', 'Im', 'Mode'],
+      eig.map(e => [e.label, p4(e.re), p4(e.im), EIG_NOTE[e.kind]])), '');
     if(d.reactions?.length) out.push(mdTable(['Reaction', 'Flux'], d.reactions.map(r => [r, p4(d.fluxes[r])])), '');
   } else out.push('Not available: ' + whySteady(info, ss?.error), '');
 
@@ -199,6 +202,16 @@ export function stabilityWord(st){
   return base + (st.oscillatory ? ', oscillatory' : '');
 }
 
+/** One row per Jacobian eigenvalue, a + bi, sorted by real part (largest first). Same 1e-9 zero cutoff as te_worker. */
+export function eigenRows(st){
+  return (st?.eigenvalues ?? []).filter(e => ok(e?.[0])).map(([re, im]) => {
+    im = ok(im) && Math.abs(im) > 1e-9 ? im : 0;
+    return { re, im, label: num(Math.abs(re) <= 1e-9 ? 0 : re) + (im ? (im < 0 ? ' - ' : ' + ') + num(Math.abs(im)) + 'i' : ''),
+             kind: Math.abs(re) <= 1e-9 ? 'zero' : re < 0 ? 'decays' : 'grows' };
+  }).sort((a, b) => b.re - a.re);
+}
+const EIG_NOTE = { decays: 'decays (stable)', grows: 'grows (unstable)', zero: 'zero (conserved moiety or marginal)' };
+
 /** Floating species first (with dX/dt), then boundary species (fixed). */
 export function steadyRows(d){
   return [
@@ -222,7 +235,7 @@ export function whyNot(info, error){
 export function whySteady(info, error){
   if(info && !info.floatingSpecies.length)
     return 'This model has no floating species, so there is no steady state to solve for.' +
-      (info.reactions.length ? '' : ' Its variables are driven by rules; the Time course tab shows how they evolve.') + reported(error);
+      (info.reactions.length ? '' : ' Its variables are driven by rules; the time course on the Model tab shows how they evolve.') + reported(error);
   return line1(error);
 }
 
@@ -442,7 +455,7 @@ function subtitles(st){
       : st[1] === 'running' ? 'Solving'
       : st[1] === 'failed' ? (S.ss.error ? line1(S.ss.error) : 'No floating species to solve for')
       : (S.ss.data.stability?.stable === false ? 'Converged to an unstable steady state.' : 'Converged.') +
-        (J ? ` J = ${num(jv)} through ${J}` : ''),
+        (J ? ` J = ${num(jv)} through ${J}` : '') + eigShort(S.ss.data.stability),
     !loaded ? 'Computed from the steady state'
       : st[2] === 'running' ? 'Computing'
       : st[2] === 'failed' ? (S.mca.error ? line1(S.mca.error) : 'No reactions to analyse') : 'Scaled control coefficients at the steady state',
@@ -454,7 +467,7 @@ function subtitles(st){
   ];
 }
 
-const TITLES = ['Import model', 'Steady state', 'Control analysis', 'Parameter scan'];
+const TITLES = ['Import model', 'Steady state and eigenvalues', 'Control analysis', 'Parameter scan'];
 
 function render(){
   const st = stepStatus(S), subs = subtitles(st), loaded = S.info.state === 'ok';
@@ -519,9 +532,26 @@ function body2(){
     <div class="an-line">Solver residual <span class="mono">${!ok(d.distance) ? 'n/a' : d.distance === 0 ? '0' : d.distance.toExponential(1)}</span>
       ${ok(st.maxRealPart) ? ` · max Re(λ) <span class="mono">${num(st.maxRealPart)}</span>` : ''}
       · <span class="${bad ? 'an-bad' : 'an-good'}">${stabilityWord(st)}</span></div>
+    ${eigTable(st)}
     ${bad ? '<p class="an-note">The solver converged, but this state is unstable: the system moves away from it after any small disturbance, so a time course will not settle here.</p>' : ''}
     ${d.reactions.length ? `<div class="an-flux">${d.reactions.map(r =>
       `<span><span class="muted">J ${esc(r)}</span> <span class="mono">${num(d.fluxes[r])}</span></span>`).join('')}</div>` : ''}`;
+}
+
+/** The header's view of the eigenvalues: the first few, so they show with the step closed. */
+export function eigShort(st, max = 4){
+  const rows = eigenRows(st);
+  if(!rows.length) return '';
+  return ' · λ = ' + rows.slice(0, max).map(e => e.label).join(', ') + (rows.length > max ? ` (+${rows.length - max} more)` : '');
+}
+
+function eigTable(st){
+  const rows = eigenRows(st);
+  if(!rows.length) return st.error ? `<p class="an-note">Eigenvalues not available: ${esc(line1(st.error))}</p>` : '';
+  return `<table class="an-table an-eig">
+      <thead><tr><th>Jacobian eigenvalue</th><th class="pad">Mode</th></tr></thead>
+      <tbody>${rows.map(e => `<tr><td class="mono ${e.kind}">${e.label}</td><td class="pad muted">${EIG_NOTE[e.kind]}</td></tr>`).join('')}</tbody>
+    </table>`;
 }
 
 function heatTable(corner, m, withSum){

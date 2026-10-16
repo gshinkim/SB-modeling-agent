@@ -3,11 +3,11 @@
    chat turns. Keyword matching, not semantic: the assistant is a full agent that can
    run for minutes, so it is only asked when the user presses the button. */
 import { $, esc, SNIPPET, queryWords, hits } from './util.mjs';
-import { go, showSide, onShow } from './shell.mjs';
+import { go, onShow } from './shell.mjs';
 import { currentId } from './session.mjs';
 import { scratchDir } from './settings.mjs';
 import { S } from './state.mjs';
-import { dumpChats, ask } from './chat.mjs';
+import { dumpChats, ask, openChat } from './chat.mjs';
 import { openFile } from './files.mjs';
 
 const MAX = 30;
@@ -77,7 +77,7 @@ let seq = 0, last = { q: '', results: [] };
 
 function open(r) {
   if (r.type === 'File') return openFile(r.path);
-  if (r.type === 'Chat') return showSide('chat');
+  if (r.type === 'Chat') return openChat(r.chat);
   go('workspace', 'model');
   const ta = $('#model');
   const m = new RegExp('(^|[^\\w])(' + r.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')($|[^\\w])', 'm').exec(ta?.value ?? '');

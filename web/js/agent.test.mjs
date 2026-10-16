@@ -3,6 +3,8 @@
    (backend/local-agent.mjs) share. They were two copies and had drifted: the page's
    retried a stopped request and dropped `unthink`. */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { makeBrowserTools } from './agent.mjs';
 import { constrain, quiet } from './oai.mjs';
 
 const schema = { required: ['ok', 'notes'], properties: { ok: { type: 'boolean' }, notes: { type: 'array' } } };
@@ -152,10 +154,36 @@ function rig(script) {
   assert.deepEqual(staged, [[{ role: 'system', content: 'SYS' }, { role: 'user', content: 'the question' }], 1]);
   assert.deepEqual(events, ['workflow_start', 'phase', 'log', 'phase', 'workflow_done']);
   assert.deepEqual(wf.defs.map(d => d.function.name), ['run_mca_workflow']);
-  const r = rig([call('run_mca_workflow', {}), { content: 'J = 1.2' }]);
-  r.o.tools = withWorkflow(r.o.tools, { prompt: 'q', emit() {}, run: async () => ({}) });
+  const r = rig([call('run_mca_workflow', { question: 'q' }), { content: 'J = 1.2' }]);
+  r.o.tools = withWorkflow(r.o.tools, { prompt: 'q', emit() {}, run: async () => ({
+    status: 'VALIDATED', execution: { ran: true, results: 'J = 1.2' }, validation: { verdict: 'pass' },
+  }) });
   assert.equal((await runTurn(r.o)).unverified, false);
   assert.deepEqual(r.events.find(e => e.type === 'tools').tools, [{ name: 'Workflow', input: { workflow: 'mca-tellurium' } }]);
+}
+
+// An attempted computation is not evidence: failures, refused calls and a halted
+// workflow must leave numerical claims marked unverified.
+{
+  for(const output of ['ERROR: model does not load', '1.2\n[failed] Python exited with code 1',
+    '{"ok":false,"error":"solver failed"}', '(no output)', 'nothing printed']){
+    const r = rig([call('run_python', { code: 'broken' }), { content: 'J = 1.2' }]);
+    r.o.tools.impl.run_python = async () => output;
+    assert.equal((await runTurn(r.o)).unverified, true, output);
+  }
+  for(const first of [call('run_python', {}), call('run_python', '{"code":')]){
+    const r = rig([first, { content: 'J = 1.2' }]);
+    assert.equal((await runTurn(r.o)).unverified, true);
+    assert.equal(r.ran.length, 0);
+  }
+  const denied = rig([call('run_python', { code: 'x' }), { content: 'J = 1.2' }]);
+  assert.equal((await runTurn({ ...denied.o, hook: { gate: () => 'run_python was refused' } })).unverified, true);
+  for(const output of [{ status: 'UNVALIDATED', exec: { ran: false } }, { status: 'FRAMED' },
+    { error: 'execution failed' }, {}]){
+    const r = rig([call('run_mca_workflow', { question: 'q' }), { content: 'J = 1.2' }]);
+    r.o.tools = withWorkflow(r.o.tools, { prompt: 'q', emit() {}, run: async () => output });
+    assert.equal((await runTurn(r.o)).unverified, true, JSON.stringify(output));
+  }
 }
 
 // one retry rule for both transports: nothing visible, or a call after tools closed
@@ -182,3 +210,34 @@ for (const [url, want] of [['http://h:1234', 'http://h:1234/v1'], ['http://h:123
                            ['http://h/v1/', 'http://h/v1'], ['https://g/api/v4', 'https://g/api/v4'], ['', '']])
   assert.equal(v1Base(url), want);
 console.log('shared loop ok');
+
+{
+  const originalFetch = globalThis.fetch, requests = [], edits = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push(url);
+    if(url === '/api/info') return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    let content;
+    try { content = readFileSync(new URL('../../' + url.slice(1), import.meta.url), 'utf8'); }
+    catch { return { ok: false, status: 404, text: async () => '' }; }
+    return { ok: true, text: async () => content };
+  };
+  try {
+    const tk = makeBrowserTools(() => 'old model', src => edits.push(src), () => {});
+    assert.match(await tk.impl.write_model({ antimony: 'new model' }), /^REFUSED/);
+    await tk.impl.load_skill({ name: 'pathway-modeling' });
+    assert.match(await tk.impl.write_model({ antimony: 'new model' }), /^REFUSED/, 'the index alone does not permit writes');
+    await assert.rejects(tk.impl.read_reference({ path: 'skills/pathway-modeling/references/missing.md' }), /could not load/);
+    assert.match(await tk.impl.write_model({ antimony: 'new model' }), /^REFUSED/, 'a failed reference read does not permit writes');
+    await assert.rejects(tk.impl.read_reference({ path: 'skills/../agents/model-scientist.md' }), /only skills/);
+    await assert.rejects(tk.impl.load_skill({ name: '../../agents' }), /unknown Skill/);
+    assert.equal(requests.includes('/api/info'), false, 'a refused edit never reaches model validation');
+    await tk.impl.read_reference({ path: 'skills/pathway-modeling/references/02_kinetics_in_a_nutshell.md' });
+    assert.equal(await tk.impl.write_model({ antimony: 'new model' }), 'saved; the editor now shows this model');
+    assert.deepEqual(edits, ['new model']);
+    const next = makeBrowserTools(() => 'old model', src => edits.push(src), () => {});
+    assert.match(await next.impl.write_model({ antimony: 'another model' }), /^REFUSED/, 'references cached by an earlier turn do not open a new turn gate');
+  } finally {
+    if(originalFetch === undefined) delete globalThis.fetch; else globalThis.fetch = originalFetch;
+  }
+}
+console.log('browser model-authoring gate ok');

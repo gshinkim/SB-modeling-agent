@@ -24,8 +24,18 @@ export class Tellurium {
   start() {
     if (this.proc || !this.installed) return;
     const p = spawn(this.python, [this.script], { cwd: this.root, env: PY_ENV, stdio: ['pipe', 'pipe', 'pipe'] });
+    const finish = error => {
+      if (this.proc === p) { this.proc = null; this.buf = ''; }
+      // A late close from an old, timed-out process must not cancel the new worker.
+      for (const [id, w] of this.pending) if (w.proc === p) {
+        this.pending.delete(id);
+        w.done({ ok: false, error });
+      }
+    };
+    p.finish = finish;
     p.stdout.setEncoding('utf8');
     p.stdout.on('data', d => {
+      if (this.proc !== p) return;
       this.buf += d;
       let i;
       while ((i = this.buf.indexOf('\n')) >= 0) {
@@ -35,18 +45,14 @@ export class Tellurium {
         try { msg = JSON.parse(line); }
         catch { console.error('[' + this.name + '] unparseable reply:', line.slice(0, 200)); continue; }
         const w = this.pending.get(msg.id);
-        if (w) { this.pending.delete(msg.id); w(msg); }
+        if (w?.proc === p) { this.pending.delete(msg.id); w.done(msg); }
       }
     });
     p.stderr.on('data', d => { const s = String(d).trim(); if (s && s !== 'READY') console.error('[' + this.name + ']', s); });
-    p.on('error', e => console.error('[' + this.name + '] spawn failed:', e.message));
-    p.stdin.on('error', () => {});
-    p.on('exit', c => {
-      this.proc = null;
-      this.buf = '';
-      for (const w of this.pending.values()) w({ ok: false, error: this.name.toLowerCase() + ' worker exited (' + c + ')' });
-      this.pending.clear();
-    });
+    p.on('error', e => finish(this.name + ' worker could not start: ' + e.message));
+    p.stdin.on('error', e => { finish(this.name + ' worker input failed: ' + e.message); p.kill(); });
+    // close also runs when spawn fails; exit alone leaves those calls pending.
+    p.on('close', c => finish(this.name.toLowerCase() + ' worker exited (' + c + ')'));
     this.proc = p;
   }
 
@@ -56,22 +62,27 @@ export class Tellurium {
     }
     this.start();
     const id = ++this.seq;
+    const p = this.proc;
+    let line;
+    try { line = JSON.stringify({ ...payload, id, op }) + '\n'; }
+    catch (e) { return Promise.resolve({ ok: false, error: 'bad request: ' + e.message }); }
     return new Promise(resolve => {
       const timer = setTimeout(() => {
         if (this.pending.delete(id)) {
-          this.proc?.kill('SIGKILL');          // a runaway solver must not wedge the server
+          p.finish(this.name.toLowerCase() + ' worker stopped after a timed-out call');
+          p.kill('SIGKILL');          // a runaway solver must not wedge the server
           resolve({ ok: false, error: this.name + ' call timed out after ' + (timeoutMs / 1000) + 's' });
         }
       }, timeoutMs);
-      this.pending.set(id, m => { clearTimeout(timer); resolve(m); });
-      this.proc.stdin.write(JSON.stringify({ ...payload, id, op }) + '\n');
+      this.pending.set(id, { proc: p, done: m => { clearTimeout(timer); resolve(m); } });
+      p.stdin.write(line);
     });
   }
 
   async versions() {
     if (this.version) return this.version;
     const r = await this.call('version');
-    this.version = r.ok ? r.result : { error: r.error };
-    return this.version;
+    if (r.ok) this.version = r.result;
+    return r.ok ? r.result : { error: r.error };
   }
 }
