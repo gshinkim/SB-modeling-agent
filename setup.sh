@@ -12,12 +12,26 @@ fi
 # The version is asked of the interpreter, not read off its name: Windows has only
 # `python` and the `py` launcher, and `python` there can be the Store stub that runs nothing.
 # $c is left unquoted on purpose, "py -3.14" is a command and its argument.
+# Setup never installs Python: it uses one already on the machine, the user's default
+# python3 first. PYTHON=/path/to/python picks one explicitly. Two stubs are skipped
+# because running them offers to download Python: macOS's /usr/bin/python3 without
+# the Command Line Tools, and Windows' WindowsApps "python" that opens the Store.
+is_stub() {
+  local p; p="$(command -v "${1%% *}" 2>/dev/null)" || return 0
+  case "$p" in
+    */WindowsApps/*) return 0 ;;
+    /usr/bin/python3) [ "$(uname)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
 PY=""
-for c in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python "py -3.14" "py -3.13" "py -3.12" "py -3.11" "py -3.10"; do
+for c in ${PYTHON:+"$PYTHON"} python3 python python3.14 python3.13 python3.12 python3.11 python3.10 "py -3.14" "py -3.13" "py -3.12" "py -3.11" "py -3.10"; do
+  is_stub "$c" && continue
   $c -c 'import sys; sys.exit(not (3,10) <= sys.version_info[:2] <= (3,14))' >/dev/null 2>&1 && { PY="$c"; break; }
 done
 if [ -z "$PY" ]; then
-  echo "Need Python 3.10-3.14 for Tellurium."
+  echo "Need Python 3.10-3.14 for Tellurium, and none was found on this machine."
+  echo "  Already have one? Rerun with it:  PYTHON=/path/to/python3 ./setup.sh"
   echo "  macOS: brew install python@3.14    Ubuntu/Debian: sudo apt install python3.14 python3.14-venv"
   echo "  Windows: winget install Python.Python.3.14"
   exit 1

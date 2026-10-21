@@ -16,7 +16,8 @@ import { BUDGET, BUDGET_LIMITS, CONTEXT_DEFAULT, replyTokens, resultCap,
 // model the user's own Claude Code is set to.
 const BUILTIN = [{ id:'', t:'Claude (default to your CLI)' }];
 const DEF = { endpoints: [], useWorkflow: true, scratchDir: '', budget: { ...BUDGET },
-  router: { enabled: false, provider: 'laya', key: '', auto: false }, localCfg:{
+  router: { enabled: false, provider: 'laya', key: '', auto: false },
+  web: { enabled: false, pubmedKey: '', brendaEmail: '', brendaPassword: '' }, localCfg:{
   olUrl:'http://localhost:11434', lmUrl:'http://localhost:1234', ggufPath:'', ggufUrl:'http://localhost:8080' } };
 
 /* Every local server the settings pane can hold. This used to be a radio group, so
@@ -35,6 +36,7 @@ const LOCAL = [
 export const settings = () => ({ ...DEF, ...store.get('settings', {}),
                                  budget:   { ...BUDGET,        ...(store.get('settings',{}).budget||{}) },
                                  router:   { ...DEF.router,    ...(store.get('settings',{}).router||{}) },
+                                 web:      { ...DEF.web,       ...(store.get('settings',{}).web||{}) },
                                  localCfg: { ...DEF.localCfg, ...(store.get('settings',{}).localCfg||{}) } });
 
 let draft = null;
@@ -46,6 +48,25 @@ export const useWorkflow = () => settings().useWorkflow !== false;
 export const scratchDir = () => settings().scratchDir || '';
 /* The Skill router (backend/router.mjs): one provider, Layla (local) or Jev (key). */
 export const router = () => settings().router;
+/* Web access (composer's Web button): sent to /api/chat as `web`. */
+export const web = () => settings().web;
+
+/* The Web popover saves on every change, outside the drawer's draft/save flow. */
+export function initWeb(){
+  const btn = $('#webBtn'), w = web();
+  const f = { enabled:['#webOn','checked'], pubmedKey:['#webPubmed','value'],
+              brendaEmail:['#webBrendaEmail','value'], brendaPassword:['#webBrendaPw','value'] };
+  const mark = on => { btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', on); };
+  for(const [k,[sel,prop]] of Object.entries(f)){
+    const el = $(sel); el[prop] = w[k];
+    el.oninput = () => {
+      const s = store.get('settings', {});
+      store.set('settings', { ...s, web: { ...web(), [k]: el[prop] } });
+      if(k === 'enabled') mark(el.checked);
+    };
+  }
+  mark(w.enabled);
+}
 
 const noSlash = u => String(u || '').replace(/\/+$/, '');
 
@@ -530,7 +551,8 @@ export function initSettings(){
   $('#scratchClear').onclick = ()=>{ draft.scratchDir=''; renderScratch(); };
   $('#addKey').onclick=()=>{ draft.endpoints.push({name:'',base:'',key:'',models:''}); renderEndpoints(); };
   $('#saveSettings').onclick=()=>{
-    store.set('settings',draft); fillModels();
+    // web is saved by its own popover; keep that over the copy taken when the drawer opened
+    store.set('settings',{ ...draft, web: web() }); fillModels();
     $('#saveMsg').textContent='Saved'; setTimeout(closeSettings,350);
   };
   $$('.tab').forEach(t=>t.onclick=()=>{

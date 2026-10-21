@@ -123,3 +123,13 @@
 .an-out-s.bad{color:var(--crit)}
 
 .an-err .btn:not(.primary){color:var(--ink)}
+
+/* per-step PDF (analysis.mjs printPdf): print only the marked step, colours kept */
+.an-pdf{align-self:flex-end;margin-bottom:-12px}
+@media print{
+  body.printing *{visibility:hidden}
+  body.printing .print-me,body.printing .print-me *{visibility:visible}
+  body.printing .print-me{position:fixed;left:0;top:0;width:100%;border:0;
+    print-color-adjust:exact;-webkit-print-color-adjust:exact}
+  body.printing .print-me .an-pdf,body.printing .print-me .an-chev{display:none}
+}

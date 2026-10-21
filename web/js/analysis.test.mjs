@@ -162,7 +162,7 @@ test('steadyRows, stabilityWord, whyNot', () => {
   assert.match(whyNot({ ...info, floatingSpecies: [] }, 'boom'), /no floating species.*Tellurium reported: boom$/);
   assert.match(whyNot(info, 'boom\nmore'), /could not reach one.*boom$/);
   assert.equal(whySteady(info, 'boom\nmore'), 'boom');
-  assert.match(whySteady({ ...info, floatingSpecies: [], reactions: [] }, null), /no floating species.*time course on the Model tab shows how they evolve\.$/);
+  assert.match(whySteady({ ...info, floatingSpecies: [], reactions: [] }, null), /no floating species.*time course on the Agent tab shows how they evolve\.$/);
   assert.ok(zeroFlux(-4e-17) && zeroFlux(0) && !zeroFlux(0.02) && !zeroFlux(null));
 });
 

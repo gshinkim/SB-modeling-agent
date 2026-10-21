@@ -74,8 +74,8 @@
     <div id="wsHead">
       <div class="tabbar">
         <div class="tabset" id="tabs" role="tablist">
-          <button role="tab" data-tab="model">Model</button>
-          <button role="tab" data-tab="notes">Analysis</button>
+          <button role="tab" data-tab="model">Agent</button>
+          <button role="tab" data-tab="notes">Numerics</button>
           <button role="tab" data-tab="meta">Metadata</button>
         </div>
         <div class="tabbar-r">
@@ -95,7 +95,6 @@
               <button role="menuitem" data-fmt="report">Run report, Markdown</button>
             </div>
           </div>
-          <button class="btn primary" id="shareBtn" title="Copy a Markdown report of this run to the clipboard">Share</button>
         </div>
       </div>
     </div>
@@ -142,6 +141,8 @@
                 <span class="ttl">Simulation</span>
                 <span class="sub" id="plotSub2"></span>
                 <span class="sp"></span>
+                <button class="btn sm" id="plotZoomParams" aria-controls="side"
+                        title="Rate constants, boundary species and initial conditions (⌘/Ctrl + B)">Parameters</button>
                 <button class="btn sm primary" id="plotZoomDone">Done <kbd>Esc</kbd></button>
               </div>
               <div id="legend" role="group" aria-label="Series"></div>
@@ -228,12 +229,11 @@
                 <button class="btn sm" id="zoomRerun">Rerun</button>
                 <button class="btn sm primary" id="zoomDone">Done <kbd>Esc</kbd></button>
               </div>
-              <div id="gutter" aria-hidden="true"></div>
               <textarea id="model" spellcheck="false" aria-label="Antimony model source"></textarea>
             </div>
           </section>
 
-          <!-- Analysis: the four steps (analysis.mjs) -->
+          <!-- Numerics: the four steps (analysis.mjs) -->
           <section class="tabpane" data-pane="notes" id="tabNotes" hidden><div id="steps"></div></section>
 
 
@@ -298,7 +298,6 @@
       <!-- ===== inspector ===== -->
       <aside id="inspector" aria-label="Inspector">
         <div class="side-tabs" id="sideTabs" role="tablist">
-          <button role="tab" data-side="chat">Assistant</button>
           <button role="tab" data-side="outline">Outline</button>
           <button role="tab" data-side="history">History</button>
           <button role="tab" data-side="info">Details</button>
@@ -326,6 +325,8 @@
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l9-9a3.7 3.7 0 0 1 5.2 5.2l-9 9a1.8 1.8 0 0 1-2.6-2.6l8.3-8.3"/></svg>
               </button>
               <input type="file" id="attachInput" multiple hidden>
+              <button class="btn sm ghost" id="webBtn" popovertarget="webPop" aria-pressed="false"
+                      title="Web access for the AI">Web</button>
               <select id="modelPick2" aria-label="AI model"></select>
               <span class="spacer"></span>
               <button class="btn primary sm" id="send" aria-label="Send">Send</button>
@@ -353,6 +354,30 @@
           </div>
         </div>
       </aside>
+    </div>
+  </div>
+
+  <!-- Web access popover (settings.mjs initWeb): saved on every change -->
+  <div id="webPop" popover>
+    <label class="switch" for="webOn" style="margin-top:0">
+      <input type="checkbox" id="webOn">
+      <span>
+        <span class="t">Let the AI search and scrape the web</span>
+        <span class="d">Reachable: web search, any URL, PubMed, BRENDA, BioModels, SABIO-RK, JWS Online.</span>
+      </span>
+    </label>
+    <div class="stack">
+      <label class="lbl">PubMed API key (optional)
+        <input class="field" id="webPubmed" type="password" autocomplete="off" spellcheck="false"></label>
+      <p class="hint" style="margin:0">Raises the NCBI rate limit.
+        <a href="https://www.ncbi.nlm.nih.gov/account/settings/" target="_blank" rel="noopener">Get a key</a></p>
+      <label class="lbl">BRENDA email (optional)
+        <input class="field" id="webBrendaEmail" type="email" autocomplete="off" spellcheck="false"></label>
+      <label class="lbl">BRENDA password (optional)
+        <input class="field" id="webBrendaPw" type="password" autocomplete="off"></label>
+      <p class="hint" style="margin:0">BRENDA&rsquo;s API needs a free
+        <a href="https://www.brenda-enzymes.org/register.php" target="_blank" rel="noopener">account</a>;
+        without it the AI falls back to the public pages.</p>
     </div>
   </div>
 
@@ -406,9 +431,10 @@
       <label class="switch" for="wfToggle">
         <input type="checkbox" id="wfToggle" checked>
         <span>
-          <span class="t">Use the mca-tellurium workflow</span>
-          <span class="d">Seven enforced stages: frame &rarr; plan &rarr; execute &rarr; validate &rarr;
-            interpret &rarr; audit. Rigorous but slow, especially on a local model.
+          <span class="t">Max Effort</span>
+          <span class="d">Every request goes through the full mca-tellurium workflow: frame &rarr; plan &rarr;
+            execute &rarr; validate &rarr; interpret &rarr; audit.
+            <strong>Warning: this takes a very long time, even for simple models</strong>, and longer still on a local model.
             Off, the agent analyses directly &mdash; same Skills, same Tellurium, no orchestration.</span>
         </span>
       </label>

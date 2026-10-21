@@ -135,10 +135,14 @@ kbd{font:11px/1 var(--mono);background:var(--hover);border:1px solid var(--borde
           display:flex;flex-direction:column;background:var(--surface);
           border:1px solid var(--border);border-radius:12px}
 #legend{display:flex;flex-wrap:wrap;gap:4px 14px;padding:10px 14px 4px;flex:none}
-.lg{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2);
+.lg{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-2);
     background:none;border:0;padding:2px 0;cursor:pointer;border-radius:4px}
 .lg:hover{color:var(--ink)}
-.lg .key{width:14px;height:3px;border-radius:2px;flex:none}
+.lg .key{width:10px;height:3px;border-radius:2px;flex:none}
+#legend{gap:2px 10px}
+#legend.clip{max-height:38px;overflow:hidden}
+#legend:not(.clip){max-height:40%;overflow-y:auto}
+.lg.lg-more{font-weight:600;color:var(--accent)}
 .lg[aria-pressed="false"]{opacity:.4}
 .lg[aria-pressed="false"] .key{background:var(--muted)!important}
 #svgWrap{flex:1;min-height:0;position:relative}
@@ -494,11 +498,15 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 #plotCard{margin:0;padding-bottom:0;border:0;border-radius:0;background:transparent}
 #plotCard.zoom{background:var(--surface);border:1px solid var(--border);border-radius:14px}
 #legend{padding:2px 0 6px}
+#plotCard.zoom #legend{padding:8px 14px 4px}
 .sim-foot{display:flex;gap:28px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--grid);padding-top:10px;min-height:34px}
 #side{position:absolute;top:52px;right:0;width:min(380px,100%);max-height:calc(100% - 64px);overflow-y:auto;
   display:block;background:var(--surface);border:1px solid var(--border-2);border-radius:8px;
   box-shadow:0 8px 24px rgba(15,27,61,.14);z-index:7}
 #side[hidden]{display:none}
+/* over the full-screen plot: the sliders open beside the curves they move */
+body:has(#plotCard.zoom) #side{position:fixed;top:calc(6vh + 54px);right:calc(9vw + 10px);
+  max-height:calc(88vh - 66px);z-index:51}
 
 /* model */
 #tabModel{border-top:1px solid var(--border);padding-top:14px;gap:12px;min-height:380px}
@@ -506,11 +514,7 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 #parseMsg{font-size:13px;color:var(--ink-2);min-width:0;overflow-wrap:anywhere}
 #parseMsg .chip{font-family:var(--mono);font-size:12px;color:var(--good-ink)}
 #editorWrap{margin:0;border-radius:6px;border-color:var(--border-2)}
-#gutter{flex:none;min-width:44px;padding:12px 10px 12px 8px;text-align:right;font:13px/20px var(--mono);
-  color:var(--faint);background:var(--subtle);border-right:1px solid var(--border);
-  user-select:none;white-space:pre;overflow:hidden}
 #model{font:13px/20px var(--mono);padding:12px 14px}
-#editorWrap.zoom #gutter{display:none}
 
 /* metadata */
 .meta-grid{display:grid;grid-template-columns:170px minmax(0,1fr);border-top:1px solid var(--border);font-size:14px}
@@ -522,6 +526,7 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
   display:flex;flex-direction:column;min-height:0}
 .side-tabs{display:flex;flex:none;border-bottom:1px solid var(--border);padding:0 8px;background:var(--surface)}
 .side-tabs button{flex:1;height:46px;padding:0}
+.side-tabs[hidden]{display:none}
 .side-pane{flex:1;min-height:0;display:flex;flex-direction:column}
 .side-pane.pad{padding:16px 14px 24px;overflow-y:auto;gap:14px}
 .side-pane[hidden],#chat[hidden]{display:none}
@@ -533,6 +538,9 @@ a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-2);text-d
 #chat .ft-row{display:flex;align-items:center;gap:8px}
 #chat .ft-row select{height:28px;min-width:0;max-width:200px;font-size:12px;background:var(--surface);
   border:1px solid var(--border-2);border-radius:6px;padding:0 6px;cursor:pointer;color:var(--ink-2)}
+#webBtn.on,#webBtn.on:hover{background:var(--accent);color:var(--accent-ink)}
+#webPop{width:min(360px,calc(100vw - 32px));padding:14px;background:var(--surface);color:var(--ink);
+  border:1px solid var(--border-2);border-radius:8px;box-shadow:0 12px 32px rgba(15,27,61,.18)}
 #ask{border-radius:6px;font-size:13px;border-color:var(--border-2)}
 .msg{max-width:94%;border-radius:8px;font-size:13px;line-height:1.5}
 .msg.me{background:var(--accent-soft);color:var(--ink);border-bottom-right-radius:8px}

@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { FORMAT, WORKFLOW_OFF, summaryBlock } from '../web/js/prompt.mjs';
 import { logLine, hintLine, autoBlock } from './router.mjs';
 import { VENV_PY } from './tellurium.mjs';
+import { webOn, webEnv, webBlock, WEB_SCRIPT } from './web.mjs';
 
 /* The agent runtime is the Claude Code CLI, because that is what the project's
    assets are written against: agents/model-scientist.md is a subagent definition
@@ -156,7 +157,7 @@ export const modelGateHook = (root, modelPath) => ({ PreToolUse: [{ matcher: 'Ed
 
 export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = true,
                             liveModel = '', modelPath = 'workspace/model.txt',
-                            scratch = '', summary = '' }) {
+                            scratch = '', summary = '', web = null }) {
   const args = [
     '-p', prompt,
     '--agent', AGENT,
@@ -185,7 +186,8 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
     `Bash(*${process.platform === 'win32' ? '' : root}/${VENV_PY}*)`,
     '--append-system-prompt', projectModel(SYSTEM_APPEND + skillsBlock(root) + (scratch ? scratchBlock(scratch) : '') +
                               liveModelBlock(liveModel) + summaryBlock(summary) +
-                              (useWorkflow ? '' : '\n\n' + NO_WORKFLOW), modelPath),
+                              (useWorkflow ? '' : '\n\n' + NO_WORKFLOW) +
+                              (webOn(web) ? webBlock(`Run it with Bash as one plain command:\n./${VENV_PY} ${WEB_SCRIPT} <op> "<query>"`, web) : ''), modelPath),
     '--settings', JSON.stringify({ enableWorkflows: useWorkflow, hooks: modelGateHook(root, modelPath) }),
     '--add-dir', root,
     ...(scratch && !scratch.startsWith(root) ? ['--add-dir', scratch] : []),
@@ -196,7 +198,7 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
 
 export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow = true,
                           liveModel = '', modelPath, scratch = '', summary = '', resume = false,
-                          router = null, onEvent }) {
+                          router = null, web = null, onEvent }) {
   /* STARTED only knows about this process's own runs. A session loaded from disk
      was claimed by an earlier run of this server, so the caller says so with
      `resume` — without it the CLI is handed an id it has already claimed and the
@@ -231,14 +233,36 @@ export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow
     // stopped while routing: end the turn as a killed CLI would, without starting one
     if (killed) return emit({ type: 'done', code: null, sessionId: sid });
     proc = spawnClaude(buildArgs({ root, prompt, sid, resuming, model, useWorkflow,
-                                   liveModel, modelPath, scratch, summary }), root, env, emit, sid);
+                                   liveModel, modelPath, scratch, summary, web }), root, env, emit, sid, webEnv(web));
   })().catch(e => { emit({ type: 'fatal', error: String(e.message || e) });
                     emit({ type: 'done', code: 1, sessionId: sid }); });
 
   return { sessionId: sid, kill: () => { killed = true; proc?.kill('SIGTERM'); } };
 }
 
-function spawnClaude(args, root, env, emit, sid) {
+/* What a `claude` exit code means, in words: a bare "exited with code 1" told the
+   user nothing. The CLI's own last stderr line, when it wrote one, says it best. */
+const LOGIN = 'Run `claude` once in a terminal to log in, and `claude update` if it is old.';
+export function exitMessage(code, stderr = '', signal = null) {
+  const said = String(stderr).trim().split('\n').filter(Boolean).at(-1)?.slice(0, 400);
+  const tail = said ? ` It said: "${said}"` : '';
+  if (signal) return signal === 'SIGKILL'
+    ? 'Claude Code was killed (SIGKILL), most often because the machine ran out of memory.' + tail
+    : `Claude Code was stopped by ${signal}.` + tail;
+  switch (code) {
+    case 1: return 'Claude Code failed (exit 1). Usually it is not logged in, its login expired, or it is out of date. ' +
+                   LOGIN + tail;
+    case 2: return 'Claude Code rejected its options (exit 2): the installed version is probably too old for this app. ' +
+                   'Run `claude update`.' + tail;
+    case 126: return 'The `claude` CLI was found but cannot run (exit 126): check that it is executable, or reinstall Claude Code.' + tail;
+    case 127: return 'The `claude` CLI was not found (exit 127). Install Claude Code and make sure `claude` is on PATH, then restart this app.' + tail;
+    case 130: case 143: return `Claude Code was interrupted (exit ${code}).` + tail;
+    case 137: return 'Claude Code was killed (exit 137), most often because the machine ran out of memory.' + tail;
+    default: return `Claude Code stopped with exit code ${code}. ${LOGIN}` + tail;
+  }
+}
+
+function spawnClaude(args, root, env, emit, sid, keys = {}) {
   /* Windows caps a whole command line at 32,767 characters, and a turn's prompt (with
      Skills inlined) plus its system prompt (live model, history) can pass that. So
      neither rides in argv: the prompt goes in on stdin, the system prompt in a file. */
@@ -254,13 +278,13 @@ function spawnClaude(args, root, env, emit, sid) {
     // Only MAX_THINKING_TOKENS is a caller override — the request body's `env` is not
     // otherwise merged into the child process (it used to be, letting a direct POST
     // set PATH, CLAUDE_*, proxy vars, etc. for the `claude` subprocess).
-    env: { ...process.env, MAX_THINKING_TOKENS: String(env.MAX_THINKING_TOKENS ?? '6000') },
+    env: { ...process.env, ...keys, MAX_THINKING_TOKENS: String(env.MAX_THINKING_TOKENS ?? '6000') },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   proc.stdin.on('error', () => {});                       // no CLI to write to: 'error' below reports it
   proc.stdin.end(prompt);
 
-  let buf = '';
+  let buf = '', errTail = '', answered = false;
   proc.stdout.setEncoding('utf8');
   proc.stdout.on('data', d => {
     buf += d;
@@ -268,17 +292,23 @@ function spawnClaude(args, root, env, emit, sid) {
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i); buf = buf.slice(i + 1);
       if (!line.trim()) continue;
-      try { emit(JSON.parse(line)); }
+      try { const ev = JSON.parse(line); if (ev.type === 'result') answered = true; emit(ev); }
       catch { /* a non-JSON line from the CLI is noise, not a turn */ }
     }
   });
   proc.stderr.setEncoding('utf8');
-  proc.stderr.on('data', d => emit({ type: 'stderr', text: String(d) }));
+  proc.stderr.on('data', d => { errTail = (errTail + d).slice(-2000); emit({ type: 'stderr', text: String(d) }); });
   proc.on('error', e => { tidy(); emit({ type: 'fatal', error: e.code === 'ENOENT'
     ? 'The `claude` CLI was not found on PATH. Install Claude Code, or pick a different runtime in Settings.' +
       (process.platform === 'win32' ? ' On Windows use the native installer (claude.exe); the npm install is a .cmd shim this app cannot start.' : '')
     : e.message }); });
-  proc.on('close', code => { tidy(); emit({ type: 'done', code, sessionId: sid }); });
+  proc.on('close', (code, signal) => {
+    tidy();
+    // a turn that already answered, or one the user stopped (SIGTERM from kill()), needs no explanation
+    if (!answered && (code ? code !== 0 : signal && signal !== 'SIGTERM'))
+      emit({ type: 'fatal', error: exitMessage(code, errTail, code ? null : signal) });
+    emit({ type: 'done', code, sessionId: sid });
+  });
   return proc;
 }
 

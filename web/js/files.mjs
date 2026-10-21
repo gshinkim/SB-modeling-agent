@@ -91,15 +91,7 @@ async function load() {
   if (pending) { const p = pending; pending = null; select(p); }
 }
 
-/* ------------------------------ the editor ------------------------------ */
-function gutter() {
-  const n = ta().value.split('\n').length, g = $('#flGutter');
-  if (g.dataset.n !== String(n)) {
-    g.dataset.n = n;
-    g.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n');
-  }
-  g.scrollTop = ta().scrollTop;
-}
+/* ------------------------------ the editor: a plain text box ------------------------------ */
 
 /** Everything right of the list, from `cur`. */
 function paint(msg) {
@@ -115,7 +107,7 @@ function paint(msg) {
   $('#flName').textContent = cur.path;
   const dl = $('#flDownload');
   dl.href = raw; dl.download = cur.path.split('/').pop();
-  if (cur.kind === 'text') { ta().readOnly = cur.readonly; gutter(); }
+  if (cur.kind === 'text') { ta().readOnly = cur.readonly; }
   else $('#flPreview').innerHTML = cur.kind === 'image'
     ? `<img class="fl-img" src="${esc(raw)}" alt="${esc(cur.path)}">`
     : `<div class="fl-bin"><div>${esc(typeOf(cur.path))}, ${size(cur.size)}</div>
@@ -152,7 +144,7 @@ async function show(path, f, q = where()) {
   const next = { path, where: q, mtime: f.mtime, size: f.size, saved: '', stale: false,
                  kind: IMAGE.includes(ext(path)) ? 'image' : f.text ? 'text' : 'bin',
                  tooBig: !f.text && f.size > 1048576,
-                 // the live model is edited in the Model tab, which also re-runs it
+                 // the live model is edited in the Agent tab, which also re-runs it
                  readonly: path === 'model.txt' && !!q.project && !q.dir };
   if (next.kind === 'text') {
     try {
@@ -230,10 +222,9 @@ export function initFiles() {
         <button type="button" class="btn" id="flRevert">Revert</button>
         <button type="button" class="btn primary" id="flSave">Save</button>
       </div>
-      <div class="fl-note" id="flNote" hidden>The live model is edited in the Model tab, so this copy is read-only.
-        <button type="button" class="fl-link" id="flToModel">Open the Model tab</button></div>
+      <div class="fl-note" id="flNote" hidden>The live model is edited in the Agent tab, so this copy is read-only.
+        <button type="button" class="fl-link" id="flToModel">Open the Agent tab</button></div>
       <div class="fl-editor" id="flEditor" hidden>
-        <div class="fl-gutter" id="flGutter" aria-hidden="true"></div>
         <textarea class="fl-text" id="flText" spellcheck="false" wrap="off" autocapitalize="off"
                   autocomplete="off" aria-label="File contents"></textarea>
       </div>
@@ -243,10 +234,9 @@ export function initFiles() {
 
   $('#flList').onclick = e => { const b = e.target.closest('[data-path]'); if (b) select(b.dataset.path); };
   $('#flRefresh').onclick = load;
-  ta().oninput = () => { gutter(); status(); };
-  ta().onscroll = () => { $('#flGutter').scrollTop = ta().scrollTop; };
+  ta().oninput = status;
   $('#flSave').onclick = save;
-  $('#flRevert').onclick = () => { if (!dirty()) return; ta().value = cur.saved; gutter(); status(); };
+  $('#flRevert').onclick = () => { if (!dirty()) return; ta().value = cur.saved; status(); };
   $('#flDelete').onclick = del;
   $('#flDelete').onblur = disarm;
   $('#flToModel').onclick = () => go('workspace', 'model');

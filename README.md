@@ -27,6 +27,7 @@ Then, on macOS or Linux in a terminal run the following commands:
 git clone https://github.com/gshinkim/SB-modeling-agent.git
 cd SB-modeling-agent
 bash setup.sh     # once: Python venv, Tellurium, the Layla router and its weights
+                  # uses your existing Python (never downloads one); PYTHON=/path/to/python3 bash setup.sh picks it
 bash run.sh       # open http://127.0.0.1:5173
 ```
 
@@ -181,7 +182,7 @@ loop. A 27B on a laptop can take an hour. The UI streams the current phase and a
 heartbeat so you can see it is alive, and each stage has a 15-minute budget after
 which it is forced to answer.
 
-**Settings → Runtime → "Use the mca-tellurium workflow"** turns the orchestration
+**Settings → Runtime → "Max Effort"** turns the orchestration
 off. The agent then analyses directly — same `model-scientist` definition, same
 Skills, same Tellurium, no seven-stage sequence. With it off the `Workflow` tool is
 withheld from the CLI (`--settings '{"enableWorkflows":false}'` and dropped from

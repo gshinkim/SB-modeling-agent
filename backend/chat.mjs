@@ -36,7 +36,7 @@ export async function resolveScratch(dir, runs) {
     Returns the key the turn is followed by (live.mjs). */
 export async function startTurn({ message, sessionId, sessionDirId, model, env, runtime, chatCfg,
                                   scratchDir, useWorkflow = true, resume = false, router: routerCfg,
-                                  attachments, chat },
+                                  attachments, chat, web },
                                 { root, work, te, editorEcho, eject, summarise, awake, run = runTurn }) {
   if (typeof message !== 'string' || !message.trim()) throw bad('message is empty');
   const local = runtime === 'openai';
@@ -84,7 +84,7 @@ export async function startTurn({ message, sessionId, sessionDirId, model, env, 
     startLive(key, { q: message, chat, files: att.map(f => f.name), at: Date.now() }, (emit, end) => run({
       root, sdir, mfile, scratch, message: said, ask, routerCfg, runtime, editorEcho, emit,
       agent: local ? runLocalAgent : runAgent,
-      args: { sessionId, model, env: env || {}, chatCfg, useWorkflow, resume, te, images: att.filter(f => f.kind === 'image').map(f => f.url) },
+      args: { sessionId, model, env: env || {}, chatCfg, useWorkflow, resume, te, web, images: att.filter(f => f.kind === 'image').map(f => f.url) },
       compact: (s, batch) => sum(compactPrompt(s, batch)),
       shorten: thinking => sum(thinkingPrompt(thinking)),
       end: () => { held?.kill(); end(); } }));

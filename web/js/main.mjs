@@ -21,15 +21,6 @@ const status = (kind, text) => {
   $('#runStat').textContent = text;
 };
 
-/* line numbers beside the editor; rebuilt only when the line count changes */
-const gutter = $('#gutter'); let gutterLines = 0;
-function syncGutter(){
-  const n = editor.value.split('\n').length;
-  if(n !== gutterLines){ gutterLines = n; gutter.textContent = Array.from({length:n}, (_, i) => i+1).join('\n'); }
-  gutter.scrollTop = editor.scrollTop;
-}
-editor.addEventListener('scroll', () => { gutter.scrollTop = editor.scrollTop; });
-
 const cfg = () => simulationSettings({ start: $('#tStart').value, end: $('#tEnd').value,
                                       points: $('#nPts').value });
 const savedSettings = () => simulationError(cfg()) ? undefined : cfg();
@@ -44,7 +35,6 @@ async function run(){
   const c = cfg();
   const seq = ++runSeq;
   const configError = simulationError(c, steadyMode);
-  syncGutter();
   if(!editor.value.trim()){                        // nothing to ask Tellurium yet: not an error
     clearTimeout(busyTimer);
     S.result = null; draw(); onRun(null);
@@ -194,16 +184,16 @@ let deb = null;
 // True from a keystroke until commit() picks it up: an AI edit arriving in that
 // window must not replace what the user is typing (see setOnModelChanged).
 let editing = false;
-// A keystroke only arms timers. The gutter waits for the next frame, and the run
-// (simulate, rebuild sliders, re-render analysis, save) waits for a real pause:
-// at 300 ms it fired between keystrokes and its DOM work landed mid-typing.
-let gutterFrame = 0;
+// A plain text box: typing does nothing but type. The run (simulate, rebuild sliders,
+// re-render analysis, save) waits for Apply, ⌘⏎ or leaving the editor — running it
+// on a typing pause is what made editing lag.
 editor.addEventListener('input', ()=>{
-  if(!editing) status('busy','Editing…');
+  if(!editing) status('busy','Edited · Apply to re-solve');
   editing = true;
-  if(!gutterFrame) gutterFrame = requestAnimationFrame(()=>{ gutterFrame = 0; syncGutter(); });
-  clearTimeout(deb); deb=setTimeout(commit, 700);
+  // the text still saves itself, without running anything, so closing the page loses nothing
+  clearTimeout(deb); deb = setTimeout(()=>{ deb = null; persistEditor(editor.value, savedSettings()).then(savedStatus); }, 1000);
 });
+editor.addEventListener('blur', ()=>{ if(editing) commit(); });
 $('#rerunBtn').onclick = ()=>{ clearTimeout(deb); clearTimeout(commitT); commit(); };
 /* Revert: back to the text this model had when it was opened (boot, project open,
    import or an AI edit) — edits autosave, so this is the only way back. */
@@ -261,6 +251,7 @@ $('#steadyBtn').onclick = ()=> setSteady($('#steadyBtn').getAttribute('aria-pres
 
 $('#panelBtn').onclick=()=>togglePanel();
 $('#closePanel').onclick=()=>togglePanel(false);
+$('#plotZoomParams').onclick=()=>togglePanel();
 ['tStart','tEnd','nPts'].forEach(id=>$('#'+id).addEventListener('input',()=>{
   clearTimeout(commitT); commitT=setTimeout(commit,150);
 }));
@@ -282,8 +273,8 @@ addEventListener('keydown',e=>{
   if(e.key==='Escape'){
     if(!$('#tablePage').hidden) return showTable(false);
     if($('#editorWrap').classList.contains('zoom')) return zoomEditor(false);
-    if($('#plotCard').classList.contains('zoom')) return zoomPlot(false);
     if(!$('#side').hidden) return togglePanel(false);
+    if($('#plotCard').classList.contains('zoom')) return zoomPlot(false);
     closeSettings();
   }
 });
@@ -291,12 +282,13 @@ addEventListener('keydown',e=>{
 /* ---------------- boot ---------------- */
 // the AI's edits arrive while its turn is still running; one that matches what the
 // editor already shows changes nothing, so it must not reset the cursor either.
-// A user who is mid-keystroke wins outright — the AI's edit is dropped, not queued,
-// since applying it after the fact would still clobber whatever they typed next.
+// The AI's edit always lands, even over text typed but not yet applied: Set default
+// and Reset to default are the way back. Its pending autosave is dropped so it cannot
+// write the typed text over the AI's file a second later.
 // true when the edit was applied: chat.mjs shows the change only then
 setOnModelChanged(src=>{
   if(src === editor.value) return false;
-  if(editing){ status('err', 'AI edited the model while you were typing — kept your text'); return false; }
+  clearTimeout(deb); deb = null; editing = false;
   editor.value = src; setOpened(); run();
   return true;
 });
@@ -313,11 +305,6 @@ setOnModelChanged(src=>{
     save(new Blob([csv], {type:'text/csv'}), (slug(projName()) || 'mca-atlas') + '-coefficients-' + stampNow() + '.csv'); };
   initExport({ coef, report });
   $('#infoReport').onclick = report; $('#infoCoef').onclick = coef;
-  // no accounts and no server to share through: Share hands over the run as Markdown
-  $('#shareBtn').onclick = async () => {
-    try { await navigator.clipboard.writeText(reportMarkdown()); flash($('#shareBtn'), 'Report copied'); }
-    catch { report(); }
-  };
   initPanes({ getName: projName, rename: n => { setProjName(n); saveSoon(); },
               // not commit(): that arms a save, and an unnamed project must not get a folder for being created.
               // No project id: newProject() has just closed the old one, so this is the default model file.

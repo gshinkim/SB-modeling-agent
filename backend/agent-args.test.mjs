@@ -1,6 +1,7 @@
 /* node backend/agent-args.test.mjs */
 import assert from 'node:assert/strict';
-import { buildArgs } from './agent.mjs';
+import { buildArgs, exitMessage } from './agent.mjs';
+import { webEnv } from './web.mjs';
 import { VENV_PY } from './tellurium.mjs';
 import { join } from 'node:path';
 
@@ -70,3 +71,24 @@ const base = { root: '/tmp/app', prompt: 'hi', sid: 'abc-123', model: '',
 }
 
 console.log('agent args ok');
+
+{ // web access: block and keys only when switched on, keys never in argv
+  const web = { enabled: true, pubmedKey: ' k1 ', brendaEmail: '', brendaPassword: 'pw', evil: 'x' };
+  const sys = a => a[a.indexOf('--append-system-prompt') + 1];
+  assert.match(sys(buildArgs({ ...base, resuming: false, web })), /Web access is ON[\s\S]*backend\/py\/web\.py/);
+  assert.doesNotMatch(sys(buildArgs({ ...base, resuming: false, web: { ...web, enabled: false } })), /Web access/);
+  assert.ok(!buildArgs({ ...base, resuming: false, web }).join(' ').includes('k1'));
+  assert.deepEqual(webEnv(web), { PUBMED_API_KEY: 'k1', BRENDA_PASSWORD: 'pw' });
+  assert.deepEqual(webEnv({ ...web, enabled: false }), {});
+}
+
+{
+  // every exit code reads as a cause, not a number; the CLI's own words ride along
+  assert.match(exitMessage(1), /not logged in/);
+  assert.match(exitMessage(1, 'warn\nInvalid API key · Please run /login\n'), /It said: "Invalid API key/);
+  assert.match(exitMessage(127), /not found/);
+  assert.match(exitMessage(2), /claude update/);
+  assert.match(exitMessage(137), /out of memory/);
+  assert.match(exitMessage(null, '', 'SIGKILL'), /out of memory/);
+  assert.match(exitMessage(42), /exit code 42/);
+}

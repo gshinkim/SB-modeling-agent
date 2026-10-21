@@ -13,6 +13,7 @@ import { localSystem, workflowRule, summaryBlock } from '../web/js/prompt.mjs';
 import { logLine, hintLine, recentLine, failed } from './router.mjs';
 import { pdfText, asText } from './files.mjs';
 import { VENV_PY, PY_ENV } from './tellurium.mjs';
+import { webOn, webBlock, runWeb, OPS } from './web.mjs';
 
 /* A second agent runtime for models that are not Claude Code: anything speaking
    OpenAI-compatible /v1/chat/completions (Ollama, LM Studio, llama-server, a GGUF
@@ -195,7 +196,7 @@ export const modelGate = (run, loaded, isModelWrite, references = new Set()) => 
 };
 
 function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'workspace/runs'),
-                   modelPath = DEFAULT_MODEL_PATH, loaded = new Set(), signal, references = new Set()) {
+                   modelPath = DEFAULT_MODEL_PATH, loaded = new Set(), signal, references = new Set(), web = null) {
   // The project is readable because the Skills and the live model live there; the
   // scratch folder is the user's own and is the only other place in play. A bare
   // startsWith(root) also passes a sibling directory whose name has root as a
@@ -329,6 +330,16 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
       { name: { type: 'string', description: 'file name saying what the script does, e.g. steady-state-solver' },
         code: { type: 'string' } }, ['code']],
   ];
+  // Off means off: with web access switched off the tool is not there to call.
+  if (webOn(web)) {
+    impl.web = async args => {
+      emit({ type: 'tools', tools: [{ name: 'web', input: args }] });
+      return String(await runWeb(root, web, args, signal)).slice(0, cap);
+    };
+    schemas.push(['web', 'Search and read the web: web search, any URL, PubMed, BRENDA, BioModels, SABIO-RK, JWS Online.',
+      { op: { type: 'string', enum: OPS }, query: { type: 'string', description: 'search terms, a URL, an EC number or a database id' } },
+      ['op', 'query']]);
+  }
 
   return {
     impl, loaded, references,
@@ -397,9 +408,9 @@ const names = tools => tools.defs.map(d => d.function.name);
 
 /* --------------------------- the workflow, verbatim --------------------------- */
 export async function runWorkflowFile({ root, chat, args, emit, signal, te, scratch,
-                                        modelPath = DEFAULT_MODEL_PATH, loaded, references, rt = {} }) {
+                                        modelPath = DEFAULT_MODEL_PATH, loaded, references, rt = {}, web = null }) {
   const cap = resultCap(chat.ctx, chat.resultPct);
-  const tools = makeTools(root, emit, te, cap, scratch, modelPath, loaded, signal, references);
+  const tools = makeTools(root, emit, te, cap, scratch, modelPath, loaded, signal, references, web);
   return hostWorkflow({
     src: await readFile(join(root, 'workflows/mca-tellurium.js'), 'utf8'), args, emit,
     system: localSystem({ tools: names(tools), liveModel: args?.model ?? '', modelPath,
@@ -451,7 +462,7 @@ const EXEC_NOTE =
    "settled, do not re-derive" is the defect that made a local model loop. */
 export function runLocalAgent({ root, prompt, images, history = [], chatCfg, useWorkflow = true,
                                liveModel = '', modelPath = DEFAULT_MODEL_PATH, te, onEvent, summary = '',
-                               scratch = join(root, 'workspace/runs'), router = null }) {
+                               scratch = join(root, 'workspace/runs'), router = null, web = null }) {
   const ctrl = new AbortController();
   const rt = { fn: router };
   const emit = o => onEvent(o);
@@ -473,12 +484,12 @@ export function runLocalAgent({ root, prompt, images, history = [], chatCfg, use
       // whose real window was smaller or larger.
       await chat.detectContext(ctrl.signal);
       const cap = resultCap(chat.ctx, chat.resultPct);
-      const tools = makeTools(root, emit, te, cap, scratch, modelPath, undefined, ctrl.signal);
+      const tools = makeTools(root, emit, te, cap, scratch, modelPath, undefined, ctrl.signal, undefined, web);
 
       // Off means off: with the workflow switched off the tool is not there to call at all.
       const allTools = !useWorkflow ? tools : withWorkflow(tools, { prompt, emit, cap,
         run: async a => runWorkflowFile({
-          root, chat, emit, te, scratch, modelPath, loaded: tools.loaded, references: tools.references, signal: ctrl.signal, rt,
+          root, chat, emit, te, scratch, modelPath, loaded: tools.loaded, references: tools.references, signal: ctrl.signal, rt, web,
           args: { ...a, model: await readFile(join(root, modelPath), 'utf8').catch(() => ''),
                   workdir: scratch, exec: EXEC_NOTE },
         }) });
@@ -486,7 +497,8 @@ export function runLocalAgent({ root, prompt, images, history = [], chatCfg, use
       const system = localSystem({
         tools: names(allTools),
         liveModel, modelPath, howToRun: howToRun(root, modelPath, scratch),
-        extra: workflowRule(useWorkflow) + summaryBlock(summary),
+        extra: workflowRule(useWorkflow) + summaryBlock(summary) +
+          (webOn(web) ? webBlock('Call the `web` tool with an `op` and a `query`:', web) : ''),
       });
 
       // attached photos ride on the question itself, the OpenAI way; a model without vision refuses them

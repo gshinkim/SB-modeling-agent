@@ -8,6 +8,7 @@ import { Tellurium } from './tellurium.mjs';
 import { Chat } from './local-agent.mjs';
 import { v1Base } from '../web/js/oai.mjs';
 import { startTurn, resolveScratch } from './chat.mjs';
+import { exitMessage } from './agent.mjs';
 import { watchLive, liveMeta, stopLive } from './live.mjs';
 import { jev, laya, questions } from './router.mjs';
 import { homedir, hostname } from 'node:os';
@@ -120,14 +121,15 @@ const summarise = {
     // the batch goes in on stdin, not argv: Windows caps a command line at 32,767 characters
     const p = spawn('claude', ['-p', '--append-system-prompt', sys.content,
                                '--setting-sources', 'project', ...(model ? ['--model', model] : [])],
-                    { cwd: ROOT, stdio: ['pipe', 'pipe', 'ignore'] });
+                    { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
     p.stdin.on('error', () => {});
     p.stdin.end(user.content);
-    let out = '';
+    let out = '', err = '';
     p.stdout.setEncoding('utf8').on('data', d => (out += d));
+    p.stderr.setEncoding('utf8').on('data', d => (err = (err + d).slice(-2000)));
     const t = setTimeout(() => p.kill(), 120_000);
     p.on('error', fail);
-    p.on('close', code => { clearTimeout(t); code === 0 ? ok(out) : fail(new Error('claude -p exited ' + code)); });
+    p.on('close', (code, sig) => { clearTimeout(t); code === 0 ? ok(out) : fail(new Error(exitMessage(code, err, code === null ? sig : null))); });
   }),
 };
 

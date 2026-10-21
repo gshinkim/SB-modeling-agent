@@ -5,7 +5,7 @@ import { $, $$, store } from './util.mjs';
    them can import this without a cycle. */
 
 const NAVS = ['home', 'projects', 'workspace', 'search', 'files'];
-const TABS = ['model', 'notes', 'meta'];   // the time course shares the Model tab
+const TABS = ['model', 'notes', 'meta'];   // shown as Agent, Numerics, Metadata; the time course shares Agent
 const SIDES = ['chat', 'outline', 'history', 'info'];
 
 let nav = 'home', tab = 'model', side = 'chat';
@@ -19,12 +19,12 @@ export const where = () => ({ nav, tab, side });
 /** True while the Model tab is laid out around the conversation. */
 export const agentLayout = () => layout === 'agent' && nav === 'workspace' && tab === 'model';
 
-let wasAgent = false;
 function paint(){
-  // entering the Agent layout shows the conversation, which is what it is for;
-  // after that the Outline, History and Details tabs work as anywhere else
-  if(agentLayout() && !wasAgent) side = 'chat';
-  wasAgent = agentLayout();
+  // The assistant lives in the Agent tab and nowhere else; there it is the whole
+  // inspector. Outline, History and Details live in the other tabs.
+  const agentTab = nav === 'workspace' && tab === 'model';
+  if(agentTab) side = 'chat'; else if(side === 'chat') side = 'outline';
+  $('#sideTabs').hidden = agentTab;
   $$('#rail [data-nav]').forEach(b => b.setAttribute('aria-current', b.dataset.nav === nav));
   $$('.view').forEach(v => { v.hidden = v.dataset.view !== nav; });
   $('#wsHead').hidden = nav !== 'workspace';
@@ -57,6 +57,7 @@ export function go(toNav, toTab){
 }
 export function showSide(name){
   if(SIDES.includes(name)) side = name;
+  if(side === 'chat'){ nav = 'workspace'; tab = 'model'; store.set('tab', tab); }
   store.set('side', side);
   paint();
 }

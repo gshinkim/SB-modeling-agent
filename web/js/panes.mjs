@@ -116,7 +116,7 @@ async function createProject(nm){
 const HOME_MAX = 6;               // Hick's law: a short list to choose from; the rest is one click away
 async function renderHome(){
   const rows = S.env?.hosted ? [] : (await listSessions()).sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
-  $('#homeTitle').textContent = rows.length ? 'Welcome back' : 'Welcome to MCA Atlas';
+  $('#homeTitle').textContent = rows.length ? 'Welcome back' : 'Welcome to SB Modeling agent';
   $('#homeRecentSect').hidden = !rows.length;
   const cur = currentId();
   $('#homeRecent').innerHTML = rows.slice(0, HOME_MAX).map(s =>

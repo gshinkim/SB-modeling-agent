@@ -8,9 +8,21 @@ export const dashOf = i => i < 8 ? null : i < 16 ? '7 4' : i < 24 ? '2 3'
   : `7 3 2 ${3 * (Math.floor(i / 8) - 1)}`;
 import { S } from './state.mjs';
 
+// A long key (a large model has dozens of species) is clipped to two rows until opened.
+const LEGEND_FOLD = 12;
+let legendOpen = false;
 export function renderLegend(){
   const L=$('#legend'); L.textContent='';
   if(!S.result || S.result.names.length<2) return;   // a single series needs no legend box
+  const fold = S.result.names.length > LEGEND_FOLD;
+  L.classList.toggle('clip', fold && !legendOpen);
+  if(fold){
+    const t=document.createElement('button');
+    t.className='lg lg-more'; t.setAttribute('aria-expanded', legendOpen);
+    t.textContent = legendOpen ? 'Fewer ▴' : 'All '+S.result.names.length+' ▾';
+    t.onclick=()=>{ legendOpen=!legendOpen; renderLegend(); };
+    L.append(t);
+  }
   S.result.names.forEach((n,i)=>{
     const b=document.createElement('button');
     b.className='lg'; b.setAttribute('aria-pressed', S.hidden.has(n)?'false':'true');

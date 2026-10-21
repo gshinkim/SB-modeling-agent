@@ -1,7 +1,7 @@
 import { $, store, flash, esc } from './util.mjs';
 import { S } from './state.mjs';
 import * as api from './api.mjs';
-import { resolveModel, useWorkflow, scratchDir, router, openSettings } from './settings.mjs';
+import { resolveModel, useWorkflow, scratchDir, router, web, initWeb, openSettings } from './settings.mjs';
 import { runBrowserAgent } from './agent.mjs';
 import { renderMarkdown } from './md.mjs';
 import './latex.mjs';            // <latex-doc> and late MathJax upgrades for what renderMarkdown emits
@@ -400,7 +400,7 @@ function send(){
       if(ui.t.stopped) return;
       const off = api.chat({ message: v, chat: c.id, sessionId: c.sessionId, sessionDirId: project,
                          resume: !!c.sessionId, ...rt, scratchDir: scratchDir(),
-                         useWorkflow: useWorkflow(), router: router(), attachments }, ui.handle);
+                         useWorkflow: useWorkflow(), router: router(), web: web(), attachments }, ui.handle);
       // closing the stream no longer stops the turn: Stop has to ask the server
       ui.kill = real => { if(real) api.stopChat(project); off(); };
     }, e => ui.handle({ type: 'fatal', error: 'Could not read the attachment: ' + (e?.message ?? e) }));
@@ -532,6 +532,7 @@ export function initChat(){
   $('#chatPick').onchange = e => { stopTurn(); show(+e.target.value); };
   $('#send').onclick = ()=>{ if(abort) stopTurn(); else send(); };
   $('#attach').onclick = () => $('#attachInput').click();
+  initWeb();
   $('#attachInput').onchange = e => { attach(e.target.files); e.target.value = ''; };
   $('#attList').onclick = e => { const i = e.target.dataset.i; if(i != null){ attached.splice(+i, 1); renderAttached(); } };
   $('#ask').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });

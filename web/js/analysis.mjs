@@ -235,7 +235,7 @@ export function whyNot(info, error){
 export function whySteady(info, error){
   if(info && !info.floatingSpecies.length)
     return 'This model has no floating species, so there is no steady state to solve for.' +
-      (info.reactions.length ? '' : ' Its variables are driven by rules; the time course on the Model tab shows how they evolve.') + reported(error);
+      (info.reactions.length ? '' : ' Its variables are driven by rules; the time course on the Agent tab shows how they evolve.') + reported(error);
   return line1(error);
 }
 
@@ -424,6 +424,7 @@ function onClick(e){
   else if(act === 'coeff') choose(act, b.dataset.v);
   else if(act === 'report' || act === 'coef') ctx[act]();
   else if(act === 'scan') runScan();
+  else if(act === 'pdf') printPdf($('#anStep' + b.dataset.n));
 }
 
 function onChange(e){
@@ -484,7 +485,8 @@ function render(){
         <span class="an-tt"><span class="an-title">${title}</span><span class="an-sub">${esc(subs[k])}</span></span>
         <span class="pill ${cls}">${label}</span>${CHEV}
       </button>
-      ${isOpen ? `<div class="an-body">${bodies[k]()}</div>` : ''}
+      ${isOpen ? `<div class="an-body"><button class="btn sm ghost an-pdf" data-act="pdf" data-n="${n}"
+        title="Save this step as a PDF (choose Save as PDF in the print dialog)">PDF</button>${bodies[k]()}</div>` : ''}
     </section>`;
   }).join('');
 
@@ -509,7 +511,7 @@ function body1(){
     </div>`;
   if(S.info.state === 'loading') return '<p class="an-note">Loading the model in Tellurium.</p>';
   if(S.info.state === 'failed') return errBox('Tellurium could not load this model', esc(line1(S.info.error)),
-    '<div class="an-row"><button class="btn sm" data-act="model">Open Model tab</button></div>');
+    '<div class="an-row"><button class="btn sm" data-act="model">Open Agent tab</button></div>');
   const i = info();
   const tiles = [[i.floatingSpecies.length + i.boundarySpecies.length, 'species', 'species'], [i.reactions.length, 'reaction', 'reactions'],
                  [i.globalParameters.length, 'parameter', 'parameters'], [i.boundarySpecies.length, 'boundary species', 'boundary species']];
@@ -627,7 +629,7 @@ function body4(){
   if(!params.length) return '<p class="an-note">This model has no parameters or boundary species to vary.</p>';
   if(!obs.length) return '<p class="an-note">This model has no reaction fluxes or floating species to observe.</p>';
   const cant = !ok(base) ? `Tellurium reports no numeric value for ${param}.`
-             : base === 0 ? `${param} is 0, and a multiplicative scan of 0 stays at 0. Give it a non-zero value in the Model tab first.`
+             : base === 0 ? `${param} is 0, and a multiplicative scan of 0 stays at 0. Give it a non-zero value in the Agent tab first.`
              : !rangeOk(pick.lo, pick.hi) ? 'The range needs a lowest multiple above 0 and a highest one above that, for example 0.25 to 4.' : '';
   const dis = running ? ' disabled' : '';
   const ctl = `<div class="an-ctl">
@@ -656,7 +658,7 @@ function body4(){
       esc(line1(scan.error)) + (/[.!?]$/.test(line1(scan.error)) ? ' ' : '. ') +
       (kept ? `Steps 1–${kept} solved and are kept.` : 'No steps solved before it.') +
       (scan.solver ? ' Narrow the range, or change the model.' : ''),
-      `<div class="an-row"><button class="btn sm" data-act="model">Open Model tab</button></div>`) + (kept ? scanChart(scan) : '');
+      `<div class="an-row"><button class="btn sm" data-act="model">Open Agent tab</button></div>`) + (kept ? scanChart(scan) : '');
   }
   else if(scan.state === 'done') out = scanChart(scan);
   else out = `<p class="an-text">Choose a parameter, an observable and a range, then run the scan. Tellurium solves the steady state at each of the ${
@@ -687,6 +689,14 @@ function stalled(){
 }
 
 /* ================================ exports ================================ */
+
+/* One step as a PDF: the browser's own print-to-PDF, with everything but that step hidden (analysis.css). */
+function printPdf(el){
+  if(!el) return;
+  el.classList.add('print-me'); document.body.classList.add('printing');
+  addEventListener('afterprint', () => { el.classList.remove('print-me'); document.body.classList.remove('printing'); }, { once: true });
+  print();
+}
 
 export function coefficientsCSV(){ return S.mca.data ? buildCSV(S.mca.data) : ''; }
 
