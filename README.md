@@ -77,7 +77,7 @@ To update the tools themselves:
 
 If you change the Python version, delete `.venv` and rerun `bash setup.sh`.
 # How to Run the app: 
-https://www.youtube.com/watch?v=VFNUfk25T_o
+https://www.youtube.com/watch?v=lzYMwGxiaCc
 
 
 ## Developer Documentation
