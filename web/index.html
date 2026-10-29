@@ -79,10 +79,6 @@
           <button role="tab" data-tab="meta">Metadata</button>
         </div>
         <div class="tabbar-r">
-          <div class="seg-btns layout-seg" id="layoutSeg" role="group" aria-label="Layout">
-            <button data-layout="agent" title="The conversation in the middle; the model and the plot on the right">Agent</button>
-            <button data-layout="analysis" title="The plot and the model in the middle; the conversation on the right">Analysis</button>
-          </div>
           <span class="stat"><span class="dot" id="runDot"></span><span id="runStat">Ready</span></span>
           <div class="dl-wrap">
             <button class="btn" id="dlBtn" aria-haspopup="true" aria-expanded="false">Export</button>
@@ -315,6 +311,8 @@
             <span class="spacer"></span>
             <button class="btn icon ghost sm" id="chatSave" aria-label="Export conversation as Markdown"
                     title="Export conversation as Markdown">↓</button>
+            <button class="btn icon ghost sm" id="chatPdf" aria-label="Download conversation as PDF"
+                    title="Download conversation as PDF (choose Save as PDF in the print dialog)">PDF</button>
           </div>
           <div id="msgs"></div>
           <div class="ft">

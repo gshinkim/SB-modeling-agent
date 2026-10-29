@@ -7,7 +7,9 @@ import { slug } from './util.mjs';
 
 const DEFAULT_NAME = 'Untitled project';
 
-const post = (path, body) => fetch(path, { method: 'POST',
+// keepalive: a save sent as the tab closes still arrives. Only then: it caps the body at 64 KB.
+let leaving = false;
+const post = (path, body) => fetch(path, { method: 'POST', keepalive: leaving,
   headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
 
 export const listSessions = () => fetch('/api/sessions').then(r => r.json())
@@ -95,6 +97,10 @@ export function saveSoon(touching = true) {
    after the switch and re-saves the wrong, now-current session. A save already in
    flight is waited for too: its answer carries a folder id, and landing after the
    switch it would hand that id to the project opened since. */
+// the tab closing inside the 800 ms after a turn ended used to drop that turn
+globalThis.addEventListener?.('pagehide', () => { if (scheduled) { leaving = true; cancelPending(); saveNow(); } });
+globalThis.addEventListener?.('pageshow', () => { leaving = false; });
+
 async function flushPending() {
   if (scheduled) { cancelPending(); saveNow(); }
   await saveIdle();

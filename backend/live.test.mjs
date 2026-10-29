@@ -5,7 +5,8 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startLive, watchLive, liveMeta, stopLive } from './live.mjs';
-import { saveSession } from './sessions.mjs';
+import { saveSession, openSession } from './sessions.mjs';
+import { keepTurn } from './chat.mjs';
 
 test('closing the page does not stop the turn, and a page that comes back sees all of it', () => {
   let emit, end, stopped = 0;
@@ -77,4 +78,29 @@ test('a project renamed mid-turn keeps its turn, under the new id and the old on
   assert.equal((await saveSession(work, { name: 'Before', fresh: true })).id, 'Before');
   assert.equal(liveMeta('Before'), null);
   assert.deepEqual(liveMeta('After'), { q: 'x' });
+});
+
+test('a turn that ends with no page watching is saved to its chat on disk, then forgotten', async () => {
+  const work = await mkdtemp(join(tmpdir(), 'keep-'));
+  const { id } = await saveSession(work, { id: 'Kept', fresh: true, name: 'Kept',
+    chats: [{ id: 1, title: 'old', history: [], sessionId: null, log: [] }] });
+  let saved;
+  const keep = keepTurn(work);
+  let emit, end;
+  startLive(id, { q: 'why?', chat: 1, at: Date.now() }, (e, n) => { emit = e; end = n; },
+            (...a) => (saved = keep(...a)));
+  watchLive(id, () => {})();                            // the tab closes
+  emit({ type: 'session', sessionId: 's1' });
+  emit({ type: 'tools', tools: [{ name: 'simulate' }] });
+  emit({ type: 'result', text: 'because' });
+  emit({ type: 'done' });
+  end();
+  await saved;
+  assert.equal(liveMeta(id), null, 'forgotten, so a page coming back does not log it twice');
+  const c = (await openSession(work, id)).chats[0];
+  assert.equal(c.log.length, 1);
+  assert.equal(c.log[0].q, 'why?');
+  assert.equal(c.log[0].a, 'because');
+  assert.deepEqual(c.log[0].tools, ['simulate']);
+  assert.equal(c.sessionId, 's1');
 });

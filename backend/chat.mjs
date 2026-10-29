@@ -11,7 +11,8 @@ import { runAgent } from './agent.mjs';
 import { runLocalAgent } from './local-agent.mjs';
 import { runTurn } from './turn.mjs';
 import { startLive } from './live.mjs';
-import { compactPrompt, thinkingPrompt } from './sessions.mjs';
+import { compactPrompt, thinkingPrompt, appendTurn } from './sessions.mjs';
+import { newTurn } from '../web/js/turn.mjs';   // the page's own reading of a turn's events
 import { rootFor, saveAttachments, attachmentNote } from './files.mjs';
 
 const bad = msg => Object.assign(new Error(msg), { status: 400 });
@@ -29,6 +30,18 @@ export async function resolveScratch(dir, runs) {
   await access(p, FS.W_OK).catch(() => { throw new Error('cannot write to: ' + p); });
   return p;
 }
+
+/* A turn no page saw end is read the way the page reads one and logged to its chat on
+   disk, so closing the tab, or the server, does not lose it. */
+export const keepTurn = work => (key, meta, events) => {
+  const c = { sessionId: null, log: [], history: [] }, t = newTurn(meta.q, c);
+  t.started = meta.at;
+  for (const ev of events) t.feed(ev);
+  t.feed({ type: 'closed' });
+  if (!c.log.length) return;
+  return appendTurn(work, key, meta.chat, c.sessionId, c.log[0], c.history)
+    .catch(e => console.error('[keep turn]', key, e.message));
+};
 
 /** `q` is the request body; `work` the workspace root. `eject`, `summarise` ({ local,
     claude }) and `awake` are the outside effects, `run` is runTurn (or a fake). A request
@@ -87,7 +100,7 @@ export async function startTurn({ message, sessionId, sessionDirId, model, env, 
       args: { sessionId, model, env: env || {}, chatCfg, useWorkflow, resume, te, web, images: att.filter(f => f.kind === 'image').map(f => f.url) },
       compact: (s, batch) => sum(compactPrompt(s, batch)),
       shorten: thinking => sum(thinkingPrompt(thinking)),
-      end: () => { held?.kill(); end(); } }));
+      end: () => { held?.kill(); end(); } }), sessionDirId && keepTurn(work));
   } catch (e) { held?.kill(); throw e; }
   return key;
 }

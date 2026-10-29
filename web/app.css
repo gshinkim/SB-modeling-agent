@@ -624,7 +624,6 @@ body:has(#plotCard.zoom) #side{position:fixed;top:calc(6vh + 54px);right:calc(9v
 
 /* ---- Agent layout (shell.mjs agentLayout): the conversation is the page; the model
    (top) and the time course (bottom) share a resizable column on the right ---- */
-.layout-seg[hidden]{display:none}
 .seg-btns button[aria-pressed="true"]{background:var(--accent-soft);color:var(--ink);font-weight:600}
 #stage.agent #inspector{order:-1;flex:1;width:auto;min-width:360px;border-left:0;border-right:1px solid var(--border);background:var(--bg)}
 #stage.agent #viewWorkspace{flex:0 0 var(--rightW,42%);min-width:320px;max-width:70%}
@@ -647,7 +646,6 @@ body:has(#plotCard.zoom) #side{position:fixed;top:calc(6vh + 54px);right:calc(9v
 #stage.agent .msg.me{max-width:80%}
 #stage.agent #chat .ft{border-top:0;padding:0 24px 18px}
 #stage.agent #ask{min-height:52px;border-radius:12px;font-size:14px}
-.layout-seg button{font-size:12.5px;height:28px;padding:0 12px}
 
 /* A narrow window must still expose every workspace control. Stack the document
    and assistant, and scroll the stage instead of clipping a 900px-wide app. */

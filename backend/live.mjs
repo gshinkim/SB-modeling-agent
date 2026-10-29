@@ -19,14 +19,22 @@ const at = key => {
 
 /** Start the one turn of `key`, stopping a running one first. `begin(emit, end)` starts
     the work and returns its stop(); `meta` is what a returning page needs to redraw the
-    question (its text, the chat it belongs to, attachment names, when it began). */
-export function startLive(key, meta, begin) {
+    question (its text, the chat it belongs to, attachment names, when it began).
+    `keep(key, meta, events)` saves a turn no page saw end: the tab was closed, or another
+    project opened. It is then forgotten here, so a page that comes back reads it from disk
+    instead of replaying it (and logging it a second time). */
+export function startLive(key, meta, begin, keep) {
   stopLive(key);
   key = at(key);
-  const run = { meta, events: [], subs: new Set(), ended: false, stop: () => {} };
+  const run = { meta, events: [], subs: new Set(), ended: false, stop: () => {}, keep };
   LIVE.set(key, run);
   const emit = o => { if (run.ended) return; run.events.push(o); for (const f of [...run.subs]) f(o); };
-  const end = () => { if (run.ended) return; run.ended = true; for (const f of [...run.subs]) f(null); };
+  const end = () => {
+    if (run.ended) return;
+    run.ended = true;
+    if (keep && !run.subs.size) return void keepRun(run);
+    for (const f of [...run.subs]) f(null);
+  };
   try { run.stop = begin(emit, end) ?? run.stop; }
   catch (e) {
     end();
@@ -49,6 +57,20 @@ export function watchLive(key, on) {
   const sub = o => { if (o) return on(o); run.subs.delete(sub); fin(); };
   run.subs.add(sub);
   return () => run.subs.delete(sub);
+}
+
+const keyOf = run => { for (const [k, r] of LIVE) if (r === run) return at(k); };
+function keepRun(run){
+  const key = keyOf(run);
+  for (const [k, r] of LIVE) if (r === run) LIVE.delete(k);
+  return run.keep(key, run.meta, run.events);
+}
+
+/** The server is going down: every turn it still holds, finished or not, goes to disk
+    with what it has so far. A page that was watching one logs it too, but its save
+    replaces the whole chat list, so the turn is never there twice. */
+export function keepAll(){
+  return Promise.all([...new Set(LIVE.values())].filter(r => r.keep).map(keepRun));
 }
 
 export const liveMeta = key => LIVE.get(at(key))?.meta ?? null;

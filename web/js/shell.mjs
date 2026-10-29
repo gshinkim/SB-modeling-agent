@@ -9,28 +9,26 @@ const TABS = ['model', 'notes', 'meta'];   // shown as Agent, Numerics, Metadata
 const SIDES = ['chat', 'outline', 'history', 'info'];
 
 let nav = 'home', tab = 'model', side = 'chat';
-// Agent: the conversation is the page, the model and the plot sit on the right.
-// Analysis: the plot and the model are the page, the conversation is on the right.
-let layout = store.get('layout', 'agent');
 const listeners = [];
 /** fn({nav, tab, side}) after every change — panes that draw lazily hook in here. */
 export const onShow = fn => { listeners.push(fn); };
 export const where = () => ({ nav, tab, side });
-/** True while the Model tab is laid out around the conversation. */
-export const agentLayout = () => layout === 'agent' && nav === 'workspace' && tab === 'model';
+/** True while the Agent tab is open: the conversation is the page, the model and the plot sit on the right. */
+export const agentLayout = () => nav === 'workspace' && tab === 'model';
 
 function paint(){
   // The assistant lives in the Agent tab and nowhere else; there it is the whole
-  // inspector. Outline, History and Details live in the other tabs.
+  // inspector. The other tabs have no inspector.
   const agentTab = nav === 'workspace' && tab === 'model';
-  if(agentTab) side = 'chat'; else if(side === 'chat') side = 'outline';
-  $('#sideTabs').hidden = agentTab;
+  side = 'chat';
+  $('#sideTabs').hidden = true;
   $$('#rail [data-nav]').forEach(b => b.setAttribute('aria-current', b.dataset.nav === nav));
   $$('.view').forEach(v => { v.hidden = v.dataset.view !== nav; });
   $('#wsHead').hidden = nav !== 'workspace';
   // home and the projects list have no project open: nothing to analyse, search or browse, and no one for the assistant to help
   $$('#rail [data-nav]:not([data-nav="home"],[data-nav="projects"]), #inspector')
     .forEach(e => { e.hidden = nav === 'home' || nav === 'projects'; });
+  $('#inspector').hidden ||= !agentTab;
   // and inside a project the list of all projects is one step back, through Home
   $('#rail [data-nav="projects"]').hidden = nav !== 'home' && nav !== 'projects';
   $$('#tabs [data-tab]').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab));
@@ -41,8 +39,6 @@ function paint(){
   $('#splitGrip').hidden = tab !== 'model';
   $('#stage').classList.toggle('agent', agentLayout());
   $('#splitGrip').setAttribute('aria-orientation', agentLayout() ? 'horizontal' : 'vertical');
-  $('#layoutSeg').hidden = tab !== 'model';
-  $$('#layoutSeg [data-layout]').forEach(b => b.setAttribute('aria-pressed', b.dataset.layout === layout));
   $$('#sideTabs [data-side]').forEach(b => b.setAttribute('aria-selected', b.dataset.side === side));
   $$('.side-pane').forEach(p => { p.hidden = p.dataset.sidepane !== side; });
   listeners.forEach(fn => fn({ nav, tab, side }));
@@ -73,7 +69,6 @@ export function initShell(){
   $$('#rail [data-nav]').forEach(b => b.onclick = () => go(b.dataset.nav));
   $$('#tabs [data-tab]').forEach(b => b.onclick = () => go('workspace', b.dataset.tab));
   $$('#sideTabs [data-side]').forEach(b => b.onclick = () => showSide(b.dataset.side));
-  $$('#layoutSeg [data-layout]').forEach(b => b.onclick = () => { layout = b.dataset.layout; store.set('layout', layout); paint(); });
   initSplitGrip();
   paint();
 }

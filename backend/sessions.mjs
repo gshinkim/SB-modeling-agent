@@ -199,6 +199,24 @@ async function saveSessionNow(runsRoot, { id, name, fresh = false, chats, settin
   return { id: finalId };
 }
 
+/** A turn the server finished with no page to save it (live.mjs keep): its log entry is
+    appended to its chat, which is made if the page never saved it. */
+export function appendTurn(runsRoot, id, chat, sessionId, entry, history) {
+  return serial(async () => {
+    const dir = follow(await sessionDir(runsRoot, id));
+    const m = await readMeta(dir);
+    m.chats ??= [];
+    let c = m.chats.find(x => x.id === chat);
+    if (!c) m.chats.push(c = { id: chat, title: entry.q.length > 34 ? entry.q.slice(0, 33) + '…' : entry.q,
+                               history: [], sessionId: null, log: [] });
+    (c.log ??= []).push(entry);
+    (c.history ??= []).push(...history);
+    if (sessionId) c.sessionId = sessionId;
+    m.updated = Date.now();
+    await writeFile(join(dir, META), JSON.stringify(m, null, 2));
+  });
+}
+
 export function openSession(runsRoot, id) { return serial(() => openSessionNow(runsRoot, id)); }
 async function openSessionNow(runsRoot, id) {
   const dir = await sessionDir(runsRoot, id);

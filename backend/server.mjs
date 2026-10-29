@@ -9,7 +9,7 @@ import { Chat } from './local-agent.mjs';
 import { v1Base } from '../web/js/oai.mjs';
 import { startTurn, resolveScratch } from './chat.mjs';
 import { exitMessage } from './agent.mjs';
-import { watchLive, liveMeta, stopLive } from './live.mjs';
+import { watchLive, liveMeta, stopLive, keepAll } from './live.mjs';
 import { jev, laya, questions } from './router.mjs';
 import { homedir, hostname } from 'node:os';
 import { listSessions, saveSession, openSession, deleteSession,
@@ -598,6 +598,9 @@ const server = createServer(async (req, res) => {
 
 // A crash here reaches the browser as an unexplained "network error"; log and stay up.
 process.on('uncaughtException', e => console.error('[uncaught]', e));
+// Ctrl+C, a closed terminal, a stop: running turns go to disk before the process does.
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'])
+  process.once(sig, () => keepAll().finally(() => process.exit(0)));
 process.on('unhandledRejection', e => console.error('[unhandled]', e));
 
 await ensureWorkspace();

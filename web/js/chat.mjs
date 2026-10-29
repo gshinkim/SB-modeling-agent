@@ -443,6 +443,22 @@ function exportChat(){
   downloadChat(proj, out.join('\n'));
 }
 
+/* The whole chat as a PDF: the rendered thread in its own window, then the
+   browser's print-to-PDF. A popup sidesteps the docked pane's fixed height,
+   which would clip a long chat to one page. */
+function exportPdf(){
+  if(!cur()?.log.length) return flash($('#chatPdf'), '—');
+  const w = open('', '_blank');
+  if(!w) return flash($('#chatPdf'), 'popup blocked');
+  const css = [...document.querySelectorAll('link[rel=stylesheet]')].map(l => l.outerHTML).join('');
+  w.document.write('<!doctype html><html data-theme="' + (document.documentElement.dataset.theme || '') + '"><head><title>' +
+    esc(document.querySelector('#projName')?.textContent.trim() || 'Chat') + '</title><base href="' + location.origin + '/">' + css +
+    '<style>body{overflow:visible;height:auto}#msgs{overflow:visible;height:auto}*{print-color-adjust:exact;-webkit-print-color-adjust:exact}</style></head><body>' +
+    $('#msgs').outerHTML + '</body></html>');
+  w.document.close();
+  w.onload = () => { w.print(); w.onafterprint = () => w.close(); };
+}
+
 /* Asked once, on a local install, before the AI has written anything anywhere.
    Declining is a real answer: the default folder inside the app works fine. */
 export function offerScratchSetup(){
@@ -514,6 +530,7 @@ function initResize(){
 export function initChat(){
   initResize();
   $('#chatSave').onclick = exportChat;
+  $('#chatPdf').onclick = exportPdf;
   $('#newChat').onclick = ()=>{ stopTurn(); makeChat(); $('#ask').focus(); };
   $('#delChat').onclick = deleteChat;
   $('#loadSession').onclick = async () => {
