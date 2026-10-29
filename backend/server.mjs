@@ -237,9 +237,9 @@ async function ejectOthers(keepBase = '', keepModel = '') {
 }
 
 /* ------------------------------- static ------------------------------- */
-// The browser agent loads its prompt, workflow and Skills over HTTP, so these
-// three folders are served read-only alongside web/.
-const ASSET_DIRS = ['agents', 'skills', 'workflows'];
+// The browser agent loads its prompt and Skills over HTTP, so these
+// two folders are served read-only alongside web/.
+const ASSET_DIRS = ['agents', 'skills'];
 
 async function serveStatic(req, res, urlPath) {
   let p = decodeURIComponent(urlPath.split('?')[0]);
@@ -311,7 +311,6 @@ const routes = {
       telluriumInstalled: te.installed,
       claude: claude ? { path: claude } : { error: 'claude CLI not found on PATH' },
       agent: existsSync(join(ROOT, 'agents/model-scientist.md')) ? 'model-scientist' : null,
-      workflow: existsSync(join(ROOT, 'workflows/mca-tellurium.js')) ? 'mca-tellurium' : null,
       skills: skills.filter(s => !s.includes('.')),   // folders only, not index.json
     });
   },
@@ -610,5 +609,5 @@ server.listen(PORT, HOST, async () => {
   console.log(te.installed ? `  tellurium ${v.tellurium} · roadrunner ${v.roadrunner} · python ${v.python}`
                            : '  tellurium NOT installed — run: bash setup.sh');
   console.log(HOSTED ? '  agent runs in the browser; no keys or code execution on this server'
-                     : '  agent: model-scientist · workflow: mca-tellurium');
+                     : '  agent: model-scientist');
 });

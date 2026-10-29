@@ -1,7 +1,7 @@
 /* The system prompt for a local model, shared by both runtimes.
 
    agents/model-scientist.md is 29,713 characters and was written for Claude Code:
-   it names Read, Write, Edit, Bash, Glob and Workflow, and it assumes a context
+   it names Read, Write, Edit, Bash and Glob, and it assumes a context
    window it never has to think about. Measured against a model LM Studio had
    loaded at its usual 8192: that file plus the tool schemas is 7,589 prompt
    tokens, leaving 603 for the question, the thinking, every tool result and the
@@ -44,6 +44,14 @@ const RULES = `
 - **Assume you do not know as much as you think.** Depend on the Skills rather than
   working things out in your head, and use them as much as possible, not only when
   you think you need them. Route from each Skill's tables to the references you need.
+- **Read the Skills before you act.** Before writing the model or running
+  anything, load the Skill the request needs and read_file its reference files —
+  loading a Skill is only its index, not reading it. run_python is refused until
+  you have read one.
+- **Compute what was asked.** Steady states, elasticities, control and response
+  coefficients are yours to compute — never skip them. Check MCA numbers against
+  the summation and connectivity theorems before reporting them; a result that
+  fails is fixed or reported as unvalidated, never interpreted.
 - **Say how well supported each part of the answer is**, and name what you did not
   establish. An unvalidated number is worse than no number.
 - **Be proportionate.** A short question gets a short, direct answer.
@@ -130,7 +138,7 @@ export const FORMAT = [
  * @param {string}   o.liveModel  current Antimony source, or ''
  * @param {string}   [o.modelPath] the live model's path from the project root
  * @param {string}   o.howToRun   one line: how this runtime executes code
- * @param {string}   [o.extra]    runtime-specific trailer (e.g. the workflow rule)
+ * @param {string}   [o.extra]    runtime-specific trailer (history, web)
  */
 export function localSystem({ tools, liveModel = '', modelPath = 'workspace/model.txt', howToRun, extra = '' }) {
   return [
@@ -144,7 +152,7 @@ export function localSystem({ tools, liveModel = '', modelPath = 'workspace/mode
     '',
     tools.join(', ') + '.',
     '',
-    'Names from other runtimes (Read, Write, Edit, Bash, Glob, Grep, Skill, Workflow)',
+    'Names from other runtimes (Read, Write, Edit, Bash, Glob, Grep, Skill)',
     'do not exist here. Calling one fails.',
     '',
     howToRun,
@@ -162,19 +170,6 @@ export function localSystem({ tools, liveModel = '', modelPath = 'workspace/mode
     TEXT_TOOL_PROTOCOL,
   ].filter(Boolean).join('\n');
 }
-
-/* The workflow switched off, said the same way on every runtime: the orchestration is
-   skipped, the scientific discipline is not. */
-export const WORKFLOW_OFF = 'The user turned the seven-stage workflow off deliberately, ' +
-  'because it is slow. Do not ask for it back and do not refuse the work.';
-
-/** The workflow rule for a local runtime's outer turn (localSystem's `extra`). */
-export const workflowRule = on => on
-  ? '\n## The workflow\n\nAnything needing numbers — control, elasticities, control ' +
-    'coefficients, steady state in a control context — MUST go through `run_mca_workflow`. ' +
-    'Answer directly only for questions that need no computation.'
-  : '\n## The workflow is off\n\n' + WORKFLOW_OFF + ' Do the analysis yourself, ' +
-    'keeping every rule above.';
 
 /* The project's history.md. Inlined rather than pointed at: a model that has to
    call a tool to find its own memory is a model that will sometimes not bother. */

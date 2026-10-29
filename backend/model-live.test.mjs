@@ -56,7 +56,7 @@ try {
                                      model: 'model m()\n  J1: A -> B; k*A;\n  k = 1; A = 1; B = 0;\nend\n' });
 
   const res = await fetch(url('/api/chat'), { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ message: 'set k to 7', sessionDirId: SID, runtime: 'openai', useWorkflow: false,
+    body: JSON.stringify({ message: 'set k to 7', sessionDirId: SID, runtime: 'openai',
       chatCfg: { baseUrl: 'http://127.0.0.1:' + stub.address().port, model: 'stub' } }) });
   const events = [];
   const rd = res.body.getReader(), dec = new TextDecoder();

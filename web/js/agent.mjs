@@ -1,13 +1,10 @@
 import { localChat } from './localai.mjs';
-import { userQuestion, resultCap, stepBudget, antimonyHint, runTurn, runStage, hostWorkflow,
-         withWorkflow } from './oai.mjs';
-import { localSystem, workflowRule, SKILL_NOTE } from './prompt.mjs';
+import { userQuestion, resultCap, stepBudget, antimonyHint, runTurn } from './oai.mjs';
+import { localSystem, SKILL_NOTE } from './prompt.mjs';
 import * as api from './api.mjs';
 
 /* The agent, running in the page. Inference happens on the user's machine; the
-   numbers come from Tellurium on the server. It does NOT re-implement the
-   workflow: it fetches workflows/mca-tellurium.js and runs that exact source,
-   supplying its own agent()/phase()/log().
+   numbers come from Tellurium on the server.
 
    The tool surface is deliberately typed - simulate/steady_state/mca, not
    "run this Python" - so a hosted deployment never executes model-authored code. */
@@ -18,7 +15,7 @@ const cache = new Map();
 const text = async url => {
   if (!cache.has(url)) {
     // A rejected promise must not stick around: one transient failure loading a
-    // Skill or the workflow would otherwise fail every later load forever.
+    // Skill would otherwise fail every later load forever.
     const p = fetch(url).then(r => {
       if (!r.ok) throw new Error('could not load ' + url + ' (HTTP ' + r.status + ')');
       return r.text();
@@ -36,14 +33,6 @@ You cannot execute code here — there is no shell and no Python. Every number c
 from \`simulate\`, \`steady_state\` or \`mca\`, which run real Tellurium (libroadrunner)
 on the server. If an analysis needs something those three cannot give, say so plainly
 rather than estimating it.`;
-
-/* The workflow otherwise tells every stage to write a script and run it with Bash,
-   which this runtime has no way to do. */
-const EXEC_NOTE =
-  'Compute with the `simulate`, `steady_state` and `mca` tools — they run real ' +
-  'Tellurium on the server. There is no shell here, so there is no script to write ' +
-  'or save: report the numbers those tools return. If the plan needs something they ' +
-  'cannot do, say so in "error" instead of approximating it.';
 
 export function makeBrowserTools(getModel, setModel, emit){
   const loaded = new Set(), references = new Set();
@@ -131,7 +120,7 @@ export function makeBrowserTools(getModel, setModel, emit){
 }
 
 /** One turn. Returns { kill }. Events mirror the server runtime's shapes. */
-export function runBrowserAgent({ cfg, prompt, history = [], getModel, setModel, useWorkflow = true, onEvent }){
+export function runBrowserAgent({ cfg, prompt, history = [], getModel, setModel, onEvent }){
   const ctrl = new AbortController();
   const emit = onEvent;
   let open;   // the last tools offered, re-sent closed on wrap-up (see localChat)
@@ -149,19 +138,8 @@ export function runBrowserAgent({ cfg, prompt, history = [], getModel, setModel,
       const loop = { complete: chat, emit, signal: ctrl.signal, cap };
       const name = t => t.defs.map(d => d.function.name);
 
-      // Off means off: with the workflow switched off the tool is not there to call at all.
-      const all = !useWorkflow ? tk : withWorkflow(tk, { prompt, emit, cap,
-        run: async a => hostWorkflow({
-          src: await text('/workflows/mca-tellurium.js'), emit,
-          system: localSystem({ ...sys, tools: name(tk) }),
-          args: { ...a, model: await getModel(),
-                  workdir: '(not used — there is no filesystem here)', exec: EXEC_NOTE },
-          stage: (messages, schema) => runStage({ ...loop, messages, tools: tk, schema,
-                                                  maxSteps: Math.max(2, STEPS - 2) }),
-        }) });
-
-      const system = localSystem({ ...sys, tools: name(all), extra: workflowRule(useWorkflow) });
-      emit(await runTurn({ ...loop, tools: all, maxSteps: STEPS,
+      const system = localSystem({ ...sys, tools: name(tk) });
+      emit(await runTurn({ ...loop, tools: tk, maxSteps: STEPS,
         messages: [{ role:'system', content: system }, ...history, userQuestion(prompt + SKILL_NOTE)] }));
       emit({ type:'done', code: 0 });
     } catch (e) {

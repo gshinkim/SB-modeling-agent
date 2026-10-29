@@ -3,20 +3,19 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { FORMAT, WORKFLOW_OFF, summaryBlock } from '../web/js/prompt.mjs';
+import { FORMAT, summaryBlock } from '../web/js/prompt.mjs';
 import { logLine, hintLine, autoBlock } from './router.mjs';
 import { VENV_PY } from './tellurium.mjs';
 import { webOn, webEnv, webBlock, WEB_SCRIPT } from './web.mjs';
 
 /* The agent runtime is the Claude Code CLI, because that is what the project's
    assets are written against: agents/model-scientist.md is a subagent definition
-   and workflows/mca-tellurium.js calls agent()/phase()/Skill. Re-implementing
-   those semantics against a raw chat API would be a second, worse runtime.
-   .claude/{agents,skills,workflows} symlink to the real folders, so anything the
+   that loads Skills. Re-implementing those semantics against a raw chat API would
+   be a second, worse runtime.
+   .claude/{agents,skills} symlink to the real folders, so anything the
    user drops in skills/ is picked up on the next turn with no restart. */
 
 const AGENT = 'model-scientist';
-const WORKFLOW = 'mca-tellurium';
 
 export const SYSTEM_APPEND = `
 You are running inside MCA Atlas, a web workbench for metabolic control analysis.
@@ -31,13 +30,14 @@ Simulation settings the user has set live in workspace/settings.json
 
 Tellurium is installed at ./${VENV_PY} (tellurium, roadrunner, numpy, scipy).
 Always invoke it as ./${VENV_PY} - the system python3 does NOT have tellurium.
-Running it is pre-approved, whether or not the workflow is on. Write the script with
+Running it is pre-approved. Write the script with
 the Write tool, then run it as one plain command: ./${VENV_PY} <script>. No
 heredocs, no \`cat >\`, no chains of commands - a long compound command is refused as
 a whole even though every part of it is allowed. If a run was denied earlier in this
 conversation, that was the command's shape, not Tellurium: retry in this shape.
 
-Route every analysis through the ${WORKFLOW} workflow, per your agent definition.
+Before you write the model or run anything, read the Skill files the request needs
+(open them with Read; loading a Skill is not reading it), then do it yourself.
 
 ${FORMAT}
 `.trim();
@@ -59,22 +59,6 @@ since the user may have typed since.
 \`\`\`
 ${src.trim()}
 \`\`\``;
-
-/* Workflows off: the orchestration is skipped, the scientific discipline is not. */
-export const NO_WORKFLOW = `
-## Workflow disabled for this session
-
-The Workflow tool is NOT available and the ${WORKFLOW} workflow will not run.
-${WORKFLOW_OFF}
-
-Do the analysis directly instead, and keep every other rule in your definition:
-inspect the model before any claim about it, load a Skill with the Skill tool 
-when you need its detail use each skill as much as you can instead of using your own knowledge,
-compute nothing from memory - every number still comes from a Tellurium run you
-performed - and still say how well supported each part of your answer is.
-
-Be proportionate: a short question gets a short, direct answer.
-`.trim();
 
 /* The CLI can only discover Skills under .claude/skills, and announces that as each
    Skill's base directory. The real folder is skills/ at the install root; say so by
@@ -149,13 +133,14 @@ says workspace/model.txt, it means this file. Never read or edit workspace/model
 that is the default model, not this project's.`;
 
 /* The live model may not be written until pathway-modeling has been loaded and one of
-   its reference files read (backend/model-gate.mjs; local-agent.mjs's modelGate is the
-   same rule). A hook, not prose: the prose alone was skipped. */
-export const modelGateHook = (root, modelPath) => ({ PreToolUse: [{ matcher: 'Edit|Write|MultiEdit',
+   its reference files read, and Python may not run until some Skill file has been read
+   (backend/model-gate.mjs; local-agent.mjs's modelGate and runGate are the same rules).
+   A hook, not prose: the prose alone was skipped. */
+export const modelGateHook = (root, modelPath) => ({ PreToolUse: [{ matcher: 'Edit|Write|MultiEdit|Bash',
   hooks: [{ type: 'command', command:
     `"${process.execPath}" "${join(root, 'backend', 'model-gate.mjs')}" "${resolve(root, modelPath)}"` }] }] });
 
-export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = true,
+export function buildArgs({ root, prompt, sid, resuming, model,
                             liveModel = '', modelPath = 'workspace/model.txt',
                             scratch = '', summary = '', web = null }) {
   const args = [
@@ -167,7 +152,7 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
     // Claude 5 models default to thinking blocks with empty text ("thinking_display":
     // "updates"), which leaves the UI's thinking panel shut. Ask for the summary.
     '--thinking-display', 'summarized',
-    '--forward-subagent-text',            // surface the workflow subagents' reasoning too
+    '--forward-subagent-text',            // surface any subagents' reasoning too
     // A session id may only be *claimed* once; continuing one is --resume.
     ...(resuming ? ['--resume', sid] : ['--session-id', sid]),
     '--setting-sources', 'project',
@@ -176,7 +161,7 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
     // Narrow, not bypassed: the agent may run the project's own venv python and
     // read/edit files in the project, and nothing else. Widen only deliberately.
     '--allowedTools',
-    'Skill', ...(useWorkflow ? ['Workflow'] : []), 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'TodoWrite',
+    'Skill', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'TodoWrite',
     `Bash(./${VENV_PY}:*)`, `Bash(${VENV_PY}:*)`,
     // The agent writes scripts to the working folder by absolute path, so it runs the
     // venv by absolute path too — often after a `cd`. A plain absolute-path rule never
@@ -186,9 +171,8 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
     `Bash(*${process.platform === 'win32' ? '' : root}/${VENV_PY}*)`,
     '--append-system-prompt', projectModel(SYSTEM_APPEND + skillsBlock(root) + (scratch ? scratchBlock(scratch) : '') +
                               liveModelBlock(liveModel) + summaryBlock(summary) +
-                              (useWorkflow ? '' : '\n\n' + NO_WORKFLOW) +
                               (webOn(web) ? webBlock(`Run it with Bash as one plain command:\n./${VENV_PY} ${WEB_SCRIPT} <op> "<query>"`, web) : ''), modelPath),
-    '--settings', JSON.stringify({ enableWorkflows: useWorkflow, hooks: modelGateHook(root, modelPath) }),
+    '--settings', JSON.stringify({ hooks: modelGateHook(root, modelPath) }),
     '--add-dir', root,
     ...(scratch && !scratch.startsWith(root) ? ['--add-dir', scratch] : []),
   ];
@@ -196,7 +180,7 @@ export function buildArgs({ root, prompt, sid, resuming, model, useWorkflow = tr
   return args;
 }
 
-export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow = true,
+export function runAgent({ root, prompt, sessionId, model, env = {},
                           liveModel = '', modelPath, scratch = '', summary = '', resume = false,
                           router = null, web = null, onEvent }) {
   /* STARTED only knows about this process's own runs. A session loaded from disk
@@ -232,7 +216,7 @@ export function runAgent({ root, prompt, sessionId, model, env = {}, useWorkflow
     }
     // stopped while routing: end the turn as a killed CLI would, without starting one
     if (killed) return emit({ type: 'done', code: null, sessionId: sid });
-    proc = spawnClaude(buildArgs({ root, prompt, sid, resuming, model, useWorkflow,
+    proc = spawnClaude(buildArgs({ root, prompt, sid, resuming, model,
                                    liveModel, modelPath, scratch, summary, web }), root, env, emit, sid, webEnv(web));
   })().catch(e => { emit({ type: 'fatal', error: String(e.message || e) });
                     emit({ type: 'done', code: 1, sessionId: sid }); });
@@ -317,9 +301,9 @@ export function toUiEvent(ev) {
   if (ev.type === 'stderr' || ev.type === 'fatal' || ev.type === 'done') return ev;
   if (ev.type === 'system' && ev.subtype === 'init')
     return { type: 'init', model: ev.model, tools: ev.tools, agents: ev.agents, sessionId: ev.session_id };
-  /* A workflow's stages run as subagents whose tool calls the CLI does not stream: all
+  /* Subagents whose tool calls the CLI does not stream: all
      that reaches here is progress, described as "<phase title>: <stage label>". Without
-     it a workflow turn showed one chip and then nothing for minutes. */
+     it a subagent turn showed one chip and then nothing for minutes. */
   if (ev.type === 'system' && ev.subtype === 'task_progress') {
     const tail = ': ' + ev.last_tool_name;
     return ev.last_tool_name && ev.description?.endsWith(tail)

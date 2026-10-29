@@ -5,7 +5,8 @@ import { writeFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { missing } from './model-gate.mjs';
+import { missing, unread, isAnalysis } from './model-gate.mjs';
+import { runGate } from './local-agent.mjs';
 
 let seq = 0;
 const attempt = (name, input, id) => JSON.stringify({ message: { content: [{ type: 'tool_use', id, name, input }] } });
@@ -52,4 +53,33 @@ test('the hook blocks only writes to the live model, and only when the Skill was
   assert.equal(run('model.txt', used).status, 0, 'relative path resolved against cwd');
   assert.equal(run(join(d, 'script.py'), bare).status, 0, 'other files are not gated');
   assert.equal(run(model, join(d, 'nope.jsonl')).status, 0, 'no transcript: fail open');
+});
+
+test('running Python needs some Skill file opened with Read first', () => {
+  assert.match(unread(''), /REFUSED/);
+  assert.match(unread(SKILL), /REFUSED/, 'loading a Skill is not reading it');
+  assert.match(unread(use('Read', { file_path: '/app/skills/mca/SKILL.md' })), /REFUSED/);
+  assert.match(unread(use('Grep', { pattern: 'getCC', path: '/app/skills/tellurium/references' })), /REFUSED/);
+  assert.equal(unread(use('Read', { file_path: '/app/skills/mca/references/elasticities.md' })), '');
+  assert.equal(unread(use('Read', { file_path: '/app/.claude/skills/tellurium/workflows/run_control_analysis.md' })), '');
+  assert.equal(unread(REF), '');
+  assert.ok(isAnalysis('./.venv/bin/python model-scientist-runs/pass-1/ss.py'));
+  assert.ok(!isAnalysis('./.venv/bin/python backend/py/web.py pubmed "x"'), 'web access is not an analysis');
+  assert.ok(!isAnalysis('ls model-scientist-runs'));
+  assert.match(runGate('run_python', new Set()), /REFUSED/);
+  assert.equal(runGate('run_python', new Set(['x.md'])), null);
+  assert.equal(runGate('read_file', new Set()), null);
+});
+
+test('the hook blocks a Python run until a Skill file was read', () => {
+  const d = mkdtempSync(join(tmpdir(), 'gate-')), model = join(d, 'model.txt');
+  const tr = (name, text) => { const f = join(d, name); writeFileSync(f, text); return f; };
+  const run = (command, transcript_path) => spawnSync(process.execPath,
+    [fileURLToPath(new URL('./model-gate.mjs', import.meta.url)), model],
+    { input: JSON.stringify({ cwd: d, transcript_path, tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8' });
+  const bare = tr('bare.jsonl', SKILL), read = tr('read.jsonl', use('Read', { file_path: '/app/skills/mca/references/elasticities.md' }));
+  const py = './.venv/bin/python run.py';
+  assert.equal(run(py, bare).status, 2);
+  assert.equal(run(py, read).status, 0);
+  assert.equal(run('ls', bare).status, 0, 'other commands are not gated');
 });

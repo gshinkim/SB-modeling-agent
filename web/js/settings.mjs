@@ -7,15 +7,14 @@ import { BUDGET, BUDGET_LIMITS, CONTEXT_DEFAULT, replyTokens, resultCap,
          stepBudget, NO_STEP_LIMIT } from './oai.mjs';
 
 /* Two agent runtimes:
-   - claude-code : spawns the Claude Code CLI; real Skill/Workflow tools.
+   - claude-code : spawns the Claude Code CLI; real Skill tools.
    - openai      : any OpenAI-compatible server (Ollama, LM Studio, llama-server,
-                   a gateway). The backend runs workflows/mca-tellurium.js itself
-                   against that endpoint, so a plain GGUF drives the same workflow. */
+                   a gateway), driven by the backend's own tool loop. */
 
 // One entry, no model id: the turn is sent without --model, so the CLI uses whatever
 // model the user's own Claude Code is set to.
 const BUILTIN = [{ id:'', t:'Claude (default to your CLI)' }];
-const DEF = { endpoints: [], useWorkflow: true, scratchDir: '', budget: { ...BUDGET },
+const DEF = { endpoints: [], scratchDir: '', budget: { ...BUDGET },
   router: { enabled: false, provider: 'laya', key: '', auto: false },
   web: { enabled: false, pubmedKey: '', brendaEmail: '', brendaPassword: '' }, localCfg:{
   olUrl:'http://localhost:11434', lmUrl:'http://localhost:1234', ggufPath:'', ggufUrl:'http://localhost:8080' } };
@@ -42,7 +41,6 @@ export const settings = () => ({ ...DEF, ...store.get('settings', {}),
 let draft = null;
 
 /* ---- what the chat layer needs to start a turn ---- */
-export const useWorkflow = () => settings().useWorkflow !== false;
 /* '' means the install's own workspace/runs — the server resolves the default, so
    the page never has to know an absolute path it did not choose. */
 export const scratchDir = () => settings().scratchDir || '';
@@ -422,9 +420,9 @@ function renderBudget(){
     label:'Tool steps', range:BUDGET_LIMITS.steps,
     get:()=>unlimited() ? lastSteps : b.steps, set:v=>{ lastSteps=v; if(!unlimited()) b.steps=v; },
     note:v=>unlimited() ? 'No limit: the agent keeps calling tools until it answers, repeats '+
-            'the same call, or you press Stop. A workflow stage still stops at 15 minutes.'
+            'the same call, or you press Stop.'
           : stepBudget(v)+' tool calls before the agent is made to answer with what it has; '+
-            'a workflow stage gets '+Math.max(2, stepBudget(v)-2)+'. Default '+BUDGET.steps+'.' }));
+            'Default '+BUDGET.steps+'.' }));
   const stepsRow=c.lastElementChild;
   const off=document.createElement('label'); off.className='switch';
   off.innerHTML='<input type="checkbox"><span><span class="t">No step limit</span>'+
@@ -485,8 +483,6 @@ function renderRouter(){
 export function openSettings(){
   draft = structuredClone(settings());
   renderEndpoints(); renderLocal(); renderBudget(); renderEnv(); renderFound(); renderScratch();
-  $('#wfToggle').checked = draft.useWorkflow !== false;
-  $('#wfToggle').onchange = e => { draft.useWorkflow = e.target.checked; };
   renderRouter();
   $('#settings').classList.add('on'); $('#scrim').classList.add('on');
   $('#settingsBtn').setAttribute('aria-expanded','true');
@@ -513,7 +509,6 @@ function renderEnv(){
                                ' · python '+e.tellurium.python : (e.tellurium.error||'not installed'))+
     row(!e.claude.error,'Claude Code CLI', e.claude.error || e.claude.path)+
     row(!!e.agent,'Agent', e.agent ? 'agents/'+e.agent+'.md' : 'agents/model-scientist.md missing')+
-    row(!!e.workflow,'Workflow', e.workflow ? 'workflows/'+e.workflow+'.js' : 'workflows/mca-tellurium.js missing')+
     row(e.skills.length>0,'Skills', e.skills.length ? e.skills.join(', ') : 'none found in skills/');
 }
 export const refreshEnv = renderEnv;

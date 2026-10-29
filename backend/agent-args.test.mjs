@@ -6,7 +6,7 @@ import { VENV_PY } from './tellurium.mjs';
 import { join } from 'node:path';
 
 const base = { root: '/tmp/app', prompt: 'hi', sid: 'abc-123', model: '',
-               useWorkflow: true, liveModel: '', scratch: '', summary: '' };
+               liveModel: '', scratch: '', summary: '' };
 
 {
   const fresh = buildArgs({ ...base, resuming: false });

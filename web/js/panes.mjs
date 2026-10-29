@@ -4,7 +4,7 @@ import { onShow, where, go } from './shell.mjs';
 import { listSessions, currentId, newProject } from './session.mjs';
 import { openProject, deleteProjects, dumpChats } from './chat.mjs';
 import { historySig, historyHtml } from './fullhistory.mjs';
-import { scratchDir, useWorkflow } from './settings.mjs';
+import { scratchDir } from './settings.mjs';
 
 /* The small panes around the document: the projects popover on the rail, and the
    inspector's History and Details, and the Metadata tab. Each one only reads
@@ -185,7 +185,6 @@ export function renderMeta(c = caption){
                            (e?.tellurium?.python ? ', python ' + e.tellurium.python : '') : ''],
     ['Last run', S.lastRunMs ? S.lastRunMs.toFixed(0) + ' ms' : ''],
     ['Assistant', sel?.selectedOptions[0]?.textContent ?? ''],
-    ['Workflow', useWorkflow() ? 'mca-tellurium (seven enforced stages)' : 'off, the agent analyses directly'],
     ['Skills', (e?.skills ?? []).join(', ')],
     ['Working folder', scratchDir() || (currentId() ? 'workspace/' + currentId() : 'workspace/runs')],
     ['Deployment', e ? (e.hosted ? 'hosted: Tellurium only, the assistant runs in this browser' : 'local') : ''],

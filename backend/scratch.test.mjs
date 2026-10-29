@@ -27,7 +27,8 @@ const srv = createServer((req, res) => {
     const withTools = (JSON.parse(b).tools ?? []).length > 0;
     const t = withTools ? turn++ : 99;
     const delta = t < 3 ? call('load_skill', { name: ['mca', 'pathway-modeling', 'tellurium'][t] })
-      : t === 3 ? call('run_python', { code:
+      : t === 3 ? call('read_file', { path: 'skills/tellurium/references/simulation.md' })   // run_python is gated on a read
+      : t === 4 ? call('run_python', { code:
             "open('result.txt','w').write('from the scratch dir')\nprint('done')" })
       : { content: 'Ran it.' };
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -38,7 +39,7 @@ await new Promise(r => srv.listen(0, '127.0.0.1', r));
 
 const events = [];
 await new Promise(done => {
-  runLocalAgent({ root: ROOT, prompt: 'go', useWorkflow: false, scratch,
+  runLocalAgent({ root: ROOT, prompt: 'go', scratch,
     chatCfg: { baseUrl: 'http://127.0.0.1:' + srv.address().port, model: 'stub' },
     onEvent: e => { events.push(e); if (e.type === 'done') done(); } });
 });

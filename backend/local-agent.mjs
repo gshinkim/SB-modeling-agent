@@ -7,9 +7,8 @@ import { request as httpsRequest } from 'node:https';
 import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { readCompletion, resultCap, CONTEXT_DEFAULT, replyTokens, stepBudget, antimonyHint,
-         callTool, userQuestion, v1Base, completion, runTurn, runStage, hostWorkflow,
-         withWorkflow } from '../web/js/oai.mjs';
-import { localSystem, workflowRule, summaryBlock } from '../web/js/prompt.mjs';
+         callTool, userQuestion, v1Base, completion, runTurn } from '../web/js/oai.mjs';
+import { localSystem, summaryBlock } from '../web/js/prompt.mjs';
 import { logLine, hintLine, recentLine, failed } from './router.mjs';
 import { pdfText, asText } from './files.mjs';
 import { VENV_PY, PY_ENV } from './tellurium.mjs';
@@ -17,11 +16,7 @@ import { webOn, webBlock, runWeb, OPS } from './web.mjs';
 
 /* A second agent runtime for models that are not Claude Code: anything speaking
    OpenAI-compatible /v1/chat/completions (Ollama, LM Studio, llama-server, a GGUF
-   served by any of them, a hosted gateway).
-
-   The point of this file is that it does NOT re-implement the workflow. It loads
-   workflows/mca-tellurium.js and runs that exact source, supplying its own
-   agent()/phase()/log(). The user's workflow drives the local model verbatim. */
+   served by any of them, a hosted gateway). */
 
 /* ------------------------------- provider ------------------------------- */
 export class Chat {
@@ -185,6 +180,14 @@ const apiHint = stderr => /AttributeError|ImportError|ModuleNotFoundError|NameEr
 
 /* Like the Claude hook, building or changing the model requires both the Skill's
    index and an actual reference read. A refusal counts toward the repeat guard. */
+/* run_python is refused until some Skill file (references/, workflows/, examples/) has
+   been read: an analysis run on what the model remembers is the failure this prevents. */
+export const runGate = (name, skillReads) => name !== 'run_python' || skillReads.size ? null :
+  'REFUSED — read the Skills before running an analysis. No Skill file has been read this turn ' +
+  '(load_skill and SKILL.md alone do not count). Call load_skill for the Skill this needs (mca, ' +
+  'tellurium or pathway-modeling), read_file the reference files its routing table points to, ' +
+  'then call run_python again.';
+
 export const modelGate = (run, loaded, isModelWrite, references = new Set()) => {
   if (!isModelWrite || loaded.has('pathway-modeling') && references.size > 0) return null;
   if (run.refused) run.repeats++; else run.refused = true;
@@ -196,7 +199,8 @@ export const modelGate = (run, loaded, isModelWrite, references = new Set()) => 
 };
 
 function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'workspace/runs'),
-                   modelPath = DEFAULT_MODEL_PATH, loaded = new Set(), signal, references = new Set(), web = null) {
+                   modelPath = DEFAULT_MODEL_PATH, loaded = new Set(), signal, references = new Set(), web = null,
+                   skillReads = new Set()) {
   // The project is readable because the Skills and the live model live there; the
   // scratch folder is the user's own and is the only other place in play. A bare
   // startsWith(root) also passes a sibling directory whose name has root as a
@@ -268,8 +272,12 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
       // pathway-modeling reference directory satisfies the scientific gate.
       if (result.trim()) {
         const refRoot = await realpath(join(root, 'skills/pathway-modeling/references')).catch(() => null);
+        const skillRoot = await realpath(join(root, 'skills')).catch(() => null);
         const real = await realpath(abs).catch(() => null);
         if (refRoot && real && inside(real, refRoot) && real.endsWith('.md')) references.add(real);
+        if (skillRoot && real && real.endsWith('.md') &&
+            /^(mca|tellurium|pathway-modeling)[\\/](references|workflows|examples)[\\/]/.test(relative(skillRoot, real)))
+          skillReads.add(real);
       }
       return result;
     },
@@ -342,7 +350,7 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
   }
 
   return {
-    impl, loaded, references,
+    impl, loaded, references, skillReads,
     isModel: async p => {
       try { return await isModelAbs(await jail(p)); }
       catch { return false; } // the tool reports path errors; they must not fail the turn
@@ -356,8 +364,7 @@ function makeTools(root, emit, te, cap = resultCap(), scratch = join(root, 'work
 
 /* The router puts a Skill in and says "do not load it again"; the model loaded it again
    anyway — measured: bonsai-27b reloaded tellurium, ~4k tokens, right after the router.
-   Answered from this loop's own transcript, not the turn's `loaded` set: a workflow
-   stage starts from a fresh transcript and must still get the Skill. */
+   Answered from this loop's own transcript, not the turn's `loaded` set. */
 const skillIn = (messages, name) =>
   messages.some(m => String(m.content?.[0]?.text ?? m.content ?? '').includes('\nname: ' + name + '\n'));
 const reload = (messages, name, args) => name === 'load_skill' && skillIn(messages, args?.name)
@@ -387,7 +394,7 @@ async function steer(rt, tools, messages, recent, step, emit, cap) {
   if (add) Array.isArray(last.content) ? (last.content[0].text += add) : (last.content += add);
 }
 
-/* What the server adds to the shared loop, the same in a stage and in the outer turn:
+/* What the server adds to the shared loop:
    a call is refused (a Skill reload, the model gate) or run, then recorded for the
    router, which steers before step 0 and after any round that loaded a Skill or failed. */
 const dispatcher = (rt, tools, messages, emit, cap) => {
@@ -399,33 +406,13 @@ const dispatcher = (rt, tools, messages, emit, cap) => {
       bad = false; had = tools.loaded.size;
     },
     gate: async (name, args, run) => reload(messages, name, args) ??
-      modelGate(run, tools.loaded, name === 'write_file' && await tools.isModel(args.path), tools.references),
+      modelGate(run, tools.loaded, name === 'write_file' && await tools.isModel(args.path), tools.references) ??
+      runGate(name, tools.skillReads),
     ran(name, args, out) { recent.push(recentLine(name, args, out)); bad ||= failed(recent.at(-1)); },
   };
 };
 
 const names = tools => tools.defs.map(d => d.function.name);
-
-/* --------------------------- the workflow, verbatim --------------------------- */
-export async function runWorkflowFile({ root, chat, args, emit, signal, te, scratch,
-                                        modelPath = DEFAULT_MODEL_PATH, loaded, references, rt = {}, web = null }) {
-  const cap = resultCap(chat.ctx, chat.resultPct);
-  const tools = makeTools(root, emit, te, cap, scratch, modelPath, loaded, signal, references, web);
-  return hostWorkflow({
-    src: await readFile(join(root, 'workflows/mca-tellurium.js'), 'utf8'), args, emit,
-    system: localSystem({ tools: names(tools), liveModel: args?.model ?? '', modelPath,
-                          howToRun: howToRun(root, modelPath, scratch) }),
-    stage: (messages, schema) => {
-      const t0 = Date.now();
-      // A local 27B running seven sequential stages is slow but not dead — say so.
-      const beat = setInterval(() => emit({ type: 'heartbeat', seconds: Math.round((Date.now()-t0)/1000) }), 15000);
-      return runStage({ complete: a => chat.complete(a), messages, tools, schema, emit, signal, cap,
-                        maxSteps: Math.max(2, stepBudget(chat.steps) - 2),
-                        hook: dispatcher(rt, tools, messages, emit, cap) })
-        .finally(() => clearInterval(beat));
-    },
-  });
-}
 
 const DEFAULT_MODEL_PATH = 'workspace/model.txt';
 
@@ -450,17 +437,11 @@ in Python always load the live model by its absolute path:
 \`te.loada(open(${JSON.stringify(join(root, modelPath))}).read())\`
 There is no separate terminal; run_python is it.`;
 
-/* Handed to the workflow, which otherwise tells every stage to "run it with Bash". */
-const EXEC_NOTE =
-  'Run the computation with `run_python`: one self-contained script, printing every ' +
-  'number you will report. Only stdout comes back — every script you run is already ' +
-  'kept in the working folder as the reproducibility record.';
-
 /* ------------------------------ the outer turn ------------------------------ */
 /* `summary` is the project's history.md, and on the server path `history` is empty:
    one copy of each past turn, never two. Seeing a turn both live and declared
    "settled, do not re-derive" is the defect that made a local model loop. */
-export function runLocalAgent({ root, prompt, images, history = [], chatCfg, useWorkflow = true,
+export function runLocalAgent({ root, prompt, images, history = [], chatCfg,
                                liveModel = '', modelPath = DEFAULT_MODEL_PATH, te, onEvent, summary = '',
                                scratch = join(root, 'workspace/runs'), router = null, web = null }) {
   const ctrl = new AbortController();
@@ -486,25 +467,17 @@ export function runLocalAgent({ root, prompt, images, history = [], chatCfg, use
       const cap = resultCap(chat.ctx, chat.resultPct);
       const tools = makeTools(root, emit, te, cap, scratch, modelPath, undefined, ctrl.signal, undefined, web);
 
-      // Off means off: with the workflow switched off the tool is not there to call at all.
-      const allTools = !useWorkflow ? tools : withWorkflow(tools, { prompt, emit, cap,
-        run: async a => runWorkflowFile({
-          root, chat, emit, te, scratch, modelPath, loaded: tools.loaded, references: tools.references, signal: ctrl.signal, rt, web,
-          args: { ...a, model: await readFile(join(root, modelPath), 'utf8').catch(() => ''),
-                  workdir: scratch, exec: EXEC_NOTE },
-        }) });
-
       const system = localSystem({
-        tools: names(allTools),
+        tools: names(tools),
         liveModel, modelPath, howToRun: howToRun(root, modelPath, scratch),
-        extra: workflowRule(useWorkflow) + summaryBlock(summary) +
+        extra: summaryBlock(summary) +
           (webOn(web) ? webBlock('Call the `web` tool with an `op` and a `query`:', web) : ''),
       });
 
       // attached photos ride on the question itself, the OpenAI way; a model without vision refuses them
       const messages = [{ role: 'system', content: system }, ...history, userQuestion(!images?.length ? prompt
         : [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))])];
-      emit(await runTurn({ complete: a => chat.complete(a), messages, tools: allTools, emit,
+      emit(await runTurn({ complete: a => chat.complete(a), messages, tools, emit,
                            signal: ctrl.signal, cap, maxSteps: stepBudget(chat.steps),
                            hook: dispatcher(rt, tools, messages, emit, cap) }));
       emit({ type: 'done', code: 0 });

@@ -46,11 +46,12 @@ VPY="$(venv_py .venv)"
 "$VPY" -m pip install -q -r requirements.txt
 "$VPY" -c "import tellurium as te, pypdf; print('tellurium', te.__version__)"
 
-# Claude Code resolves agents/skills/workflows under .claude/. Symlinks, not copies,
+# Claude Code resolves agents/skills under .claude/. Symlinks, not copies,
 # so anything dropped into skills/ is live on the next agent turn. Recreated here
 # because a zip download or a Windows clone will not preserve them.
 mkdir -p .claude workspace/runs
-for d in skills agents workflows; do
+rm -rf .claude/workflows   # the mca-tellurium workflow is gone; the agent runs the analysis itself
+for d in skills agents; do
   rm -rf ".claude/$d"
   ln -s "../$d" ".claude/$d" 2>/dev/null || cp -R "$d" ".claude/$d"
 done

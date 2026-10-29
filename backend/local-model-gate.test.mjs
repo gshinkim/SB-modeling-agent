@@ -34,7 +34,7 @@ const run = async (calls, te) => {
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   try {
-    await new Promise(done => runLocalAgent({ root, scratch, prompt: 'change model', te, useWorkflow: false,
+    await new Promise(done => runLocalAgent({ root, scratch, prompt: 'change model', te,
       chatCfg: { model: 'stub', baseUrl: 'http://127.0.0.1:' + server.address().port },
       onEvent: e => { if (e.type === 'done') done(); } }));
     return bodies.at(-1).messages.filter(m => m.role === 'tool').at(-1).content;

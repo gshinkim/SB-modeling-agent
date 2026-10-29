@@ -5,41 +5,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { makeBrowserTools } from './agent.mjs';
-import { constrain, quiet } from './oai.mjs';
-
-const schema = { required: ['ok', 'notes'], properties: { ok: { type: 'boolean' }, notes: { type: 'array' } } };
-
-// Stop is rethrown, not taken for "no json_schema support" and asked again
-{
-  let asked = 0;
-  const complete = async () => { asked++; throw Object.assign(new Error('stopped'), { name: 'AbortError' }); };
-  await assert.rejects(constrain({ complete, messages: [], schema, emit() {} }), { name: 'AbortError' });
-  assert.equal(asked, 1);
-}
-
-// a stage forwards thinking and unthink, never the tokens; a server without
-// json_schema is asked again without it, and a missing required field is filled
-{
-  const seen = [], schemas = [];
-  const complete = async ({ schema, onStream }) => {
-    schemas.push(!!schema);
-    if (schema) throw new Error('HTTP 400 response_format');
-    for (const type of ['delta', 'thinking', 'unthink']) onStream({ type });
-    return { content: '```json\n{"ok": true}\n```' };
-  };
-  assert.deepEqual(await constrain({ complete, messages: [], schema, emit: e => seen.push(e.type) }),
-                   { ok: true, notes: [] });
-  assert.deepEqual(schemas, [true, false]);
-  assert.deepEqual(seen, ['thinking', 'unthink']);
-  quiet(e => seen.push(e.type))({ type: 'unthink' });      // the stage loop's own filter
-  assert.equal(seen.length, 3);
-}
 console.log('agent.test.mjs ok');
 
 /* The loop itself, driven with a scripted completion call and fake tools: no HTTP.
-   Both runtimes run this one copy (runTurn for the outer turn, runStage for a
-   workflow stage), so what holds here holds on the server and in the page. */
-import { runTurn, runStage, hostWorkflow, withWorkflow, completion, v1Base } from './oai.mjs';
+   Both runtimes run this one copy, so what holds here holds on the server and in the page. */
+import { runTurn, completion, v1Base } from './oai.mjs';
 
 const def = (name, required = []) => ({ type: 'function', function: { name, parameters: { type: 'object', required } } });
 const call = (name, args, id = name) => ({ tool_calls: [{ id, type: 'function',
@@ -112,20 +82,6 @@ function rig(script) {
   assert.deepEqual(seen, ['before 0', 'read -> k1 = 0.4', 'before 1', 'run_python -> REFUSED', 'before 2']);
 }
 
-// a schema stage: tools first, then the declared object, with only thinking let through
-{
-  const r = rig([call('read', { path: 'm' }), { content: 'prose' },
-    a => { a.onStream({ type: 'delta' }); a.onStream({ type: 'thinking' }); return { content: '{"ok": true}' }; }]);
-  assert.deepEqual(await runStage({ ...r.o, schema }), { ok: true, notes: [] });
-  assert.ok(r.asked[2].schema, 'the schema is asked for only once the tools are done');
-  assert.deepEqual(r.events.filter(e => e.type !== 'tools').map(e => e.type), ['thinking']);
-  // no schema: the text; and a stage past its clock is wrapped up at once
-  assert.equal(await runStage(rig([{ content: 'prose' }]).o), 'prose');
-  const late = rig([a => a.tools ? call('read', { path: 'm' }) : { content: 'late' }]);
-  assert.equal(await runStage({ ...late.o, ms: -1 }), 'late');
-  assert.deepEqual(late.ran, []);
-}
-
 // Stop between two calls of one reply: the first finishes, the second never starts
 {
   const ctrl = new AbortController();
@@ -136,34 +92,10 @@ function rig(script) {
   assert.deepEqual(r.ran, ['read']);
   assert.equal(r.asked.length, 1, 'no further completion after Stop');
   assert.equal(res.isError, true);
-  // a stage that was stopped throws rather than handing the workflow an empty result
-  const s = rig([two]);
-  s.o.tools.impl.read = async () => { ctrl.abort(); return 'x'; };
-  await assert.rejects(runStage({ ...s.o, signal: ctrl.signal }), /aborted/);
 }
 
-// the workflow file is hosted the same way on both runtimes, behind run_mca_workflow
-{
-  const events = [], staged = [];
-  const src = 'export const meta = { name: "t" };\nphase("P"); log(1);\n' +
-    'return { got: await agent(args.question, { phase: "P", label: "L", schema: 1 }) };';
-  const wf = withWorkflow({ impl: {}, defs: [] }, { prompt: 'the question', emit: e => events.push(e.type), cap: 1000,
-    run: a => hostWorkflow({ src, system: 'SYS', args: a, emit: e => events.push(e.type),
-      stage: async (messages, s) => { staged.push(messages, s); return 'staged'; } }) });
-  assert.equal(await wf.impl.run_mca_workflow({}), '{"got":"staged"}');
-  assert.deepEqual(staged, [[{ role: 'system', content: 'SYS' }, { role: 'user', content: 'the question' }], 1]);
-  assert.deepEqual(events, ['workflow_start', 'phase', 'log', 'phase', 'workflow_done']);
-  assert.deepEqual(wf.defs.map(d => d.function.name), ['run_mca_workflow']);
-  const r = rig([call('run_mca_workflow', { question: 'q' }), { content: 'J = 1.2' }]);
-  r.o.tools = withWorkflow(r.o.tools, { prompt: 'q', emit() {}, run: async () => ({
-    status: 'VALIDATED', execution: { ran: true, results: 'J = 1.2' }, validation: { verdict: 'pass' },
-  }) });
-  assert.equal((await runTurn(r.o)).unverified, false);
-  assert.deepEqual(r.events.find(e => e.type === 'tools').tools, [{ name: 'Workflow', input: { workflow: 'mca-tellurium' } }]);
-}
-
-// An attempted computation is not evidence: failures, refused calls and a halted
-// workflow must leave numerical claims marked unverified.
+// An attempted computation is not evidence: failures and refused calls must leave
+// numerical claims marked unverified.
 {
   for(const output of ['ERROR: model does not load', '1.2\n[failed] Python exited with code 1',
     '{"ok":false,"error":"solver failed"}', '(no output)', 'nothing printed']){
@@ -178,12 +110,6 @@ function rig(script) {
   }
   const denied = rig([call('run_python', { code: 'x' }), { content: 'J = 1.2' }]);
   assert.equal((await runTurn({ ...denied.o, hook: { gate: () => 'run_python was refused' } })).unverified, true);
-  for(const output of [{ status: 'UNVALIDATED', exec: { ran: false } }, { status: 'FRAMED' },
-    { error: 'execution failed' }, {}]){
-    const r = rig([call('run_mca_workflow', { question: 'q' }), { content: 'J = 1.2' }]);
-    r.o.tools = withWorkflow(r.o.tools, { prompt: 'q', emit() {}, run: async () => output });
-    assert.equal((await runTurn(r.o)).unverified, true, JSON.stringify(output));
-  }
 }
 
 // one retry rule for both transports: nothing visible, or a call after tools closed

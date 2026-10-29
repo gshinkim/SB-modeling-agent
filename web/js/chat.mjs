@@ -1,7 +1,7 @@
 import { $, store, flash, esc } from './util.mjs';
 import { S } from './state.mjs';
 import * as api from './api.mjs';
-import { resolveModel, useWorkflow, scratchDir, router, web, initWeb, openSettings } from './settings.mjs';
+import { resolveModel, scratchDir, router, web, initWeb, openSettings } from './settings.mjs';
 import { runBrowserAgent } from './agent.mjs';
 import { renderMarkdown } from './md.mjs';
 import './latex.mjs';            // <latex-doc> and late MathJax upgrades for what renderMarkdown emits
@@ -291,8 +291,7 @@ function turnUi(c, v, started = Date.now()){
     else stat.innerHTML = '<span class="thinking">'+esc(shown)+'</span>';
   };
   const paintThoughts = () => { if(tkBody.textContent !== t.thoughts) tkBody.textContent = t.thoughts; };
-  t.status = useWorkflow() ? 'Starting the model-scientist agent…'
-                           : 'Starting the model-scientist agent (workflow off)…';
+  t.status = 'Starting the model-scientist agent…';
   paintStatus();
 
   // Stop ends this turn now and only then tells the runtime, which may answer late
@@ -386,7 +385,7 @@ function send(){
     // runtime. The agent runs in the page instead — which is why a hosted setup still
     // needs the model server to allow this origin. Locally we never take that path.
     const a = runBrowserAgent({
-      cfg: rt.chatCfg, prompt: v, history: c.history, useWorkflow: useWorkflow(),
+      cfg: rt.chatCfg, prompt: v, history: c.history,
       getModel: () => $('#model').value,
       setModel: src => { $('#model').value = src;
                          $('#model').dispatchEvent(new Event('input',{bubbles:true})); },
@@ -400,7 +399,7 @@ function send(){
       if(ui.t.stopped) return;
       const off = api.chat({ message: v, chat: c.id, sessionId: c.sessionId, sessionDirId: project,
                          resume: !!c.sessionId, ...rt, scratchDir: scratchDir(),
-                         useWorkflow: useWorkflow(), router: router(), web: web(), attachments }, ui.handle);
+                         router: router(), web: web(), attachments }, ui.handle);
       // closing the stream no longer stops the turn: Stop has to ask the server
       ui.kill = real => { if(real) api.stopChat(project); off(); };
     }, e => ui.handle({ type: 'fatal', error: 'Could not read the attachment: ' + (e?.message ?? e) }));

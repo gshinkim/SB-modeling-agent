@@ -21,7 +21,6 @@ COPY backend ./backend
 COPY web ./web
 COPY agents ./agents
 COPY skills ./skills
-COPY workflows ./workflows
 
 RUN mkdir -p workspace/runs
 ENV PORT=8080 HOST=0.0.0.0 MCA_HOSTED=1

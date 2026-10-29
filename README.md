@@ -49,7 +49,7 @@ Windows notes:
   installs a `claude.cmd` shim, which the app cannot start; the installer gives
   `claude.exe`.
 - Open a new terminal after installing anything, so it is on `PATH`.
-- `.claude/{agents,skills,workflows}` are copies on Windows, not symlinks. After
+- `.claude/{agents,skills}` are copies on Windows, not symlinks. After
   adding or editing a Skill, rerun `.\setup.cmd` to refresh them.
 - WSL2 also works; inside it, follow the Linux column.
 
@@ -91,8 +91,8 @@ backend/py/          the Tellurium worker: simulate / steadyState / mca
 backend/agent.mjs    spawns the Claude Code CLI as the agent runtime
 workspace/model.txt  THE LIVE MODEL — the editor and the agent share this file
 workspace/runs/      the agent's scratch scripts, kept for inspection
-agents/  skills/  workflows/     your assets
-.claude/ -> symlinks to the three folders above
+agents/  skills/     your assets
+.claude/ -> symlinks to the two folders above
 ```
 
 ## Deploying it
@@ -142,54 +142,34 @@ Set `MCA_HOSTED=1`. That serves Tellurium and the static app only, and refuses t
 server-side agent path — so a public deployment cannot be made to execute code.
 
 Locally (`./run.sh`, no `MCA_HOSTED`) the Claude Code agent runtime stays
-available, with Bash and the real `Workflow` tool.
+available, with Bash and the real `Skill` tool.
 
-### Two agent runtimes, one workflow
+### Two agent runtimes, one agent
 
 Pick the model in the bar under the plot. **Claude (default to your CLI)** sends the
 turn with no `--model`, so it uses whatever model your own Claude Code is set to
-(change it there with `/model`). Both runtimes run **the same**
-`workflows/mca-tellurium.js` and the same `agents/model-scientist.md`.
+(change it there with `/model`). Both runtimes run the same analysis discipline:
+frame with the `mca` Skill, plan with `tellurium`, execute, validate, diagnose and
+repair on failure, interpret, audit. The agent does each stage itself; there is no
+separate workflow script.
 
-**`claude-code`** — spawns `claude -p --agent model-scientist` with
-`enableWorkflows` on, so the agent gets exactly the eight tools its frontmatter
-declares, `Workflow` and `Skill` included. A session id is claimed once with
+**`claude-code`** — spawns `claude -p --agent model-scientist`, so the agent gets
+the tools its frontmatter declares (`Skill`, `Bash`, file tools) and follows the
+procedure in `agents/model-scientist.md`. A session id is claimed once with
 `--session-id` and continued with `--resume`, so the chat has memory.
 
 **`openai`** — any OpenAI-compatible server: Ollama, LM Studio, `llama-server`, a
-GGUF served by any of them, or a hosted gateway. There is no `Workflow` tool there,
-so the runtime **loads `workflows/mca-tellurium.js` and runs that exact source**,
-supplying its own `agent()` / `phase()` / `log()` backed by the endpoint. This runs
-in the browser (`web/js/agent.mjs`) when hosted and on the server
-(`backend/local-agent.mjs`) in local dev — same workflow file either way.
+GGUF served by any of them, or a hosted gateway. It gets a compact version of the
+same rules (`web/js/prompt.mjs`). This runs in the browser (`web/js/agent.mjs`) when
+hosted and on the server (`backend/local-agent.mjs`) in local dev.
 
-Its tools are typed, not arbitrary: `simulate`, `steady_state`, `mca`,
+In the browser its tools are typed, not arbitrary: `simulate`, `steady_state`, `mca`,
 `read_model`, `write_model`, `load_skill`, `read_reference`. There is no
 "run this Python", so a hosted deployment never executes model-authored code.
 `write_model` simulates a candidate before accepting it and rejects one that does
 not load.
-The workflow is not re-implemented or approximated — your file drives the local
-model verbatim, including its `missing_from_user` halt and its repair loop. Stage
-prompts that say "call the Skill tool" are served by a `load_skill` tool over the
-same `skills/` folder.
 
-Verified on a mock endpoint: `MCA frame → Tellurium plan → Execute → MCA validate →
-MCA interpret → Tellurium audit` (Diagnose is skipped when validation passes), with
-real Tellurium runs at the Execute stage.
-
-Local models are *slow* at this: seven sequential stages, each a multi-turn tool
-loop. A 27B on a laptop can take an hour. The UI streams the current phase and a
-heartbeat so you can see it is alive, and each stage has a 15-minute budget after
-which it is forced to answer.
-
-**Settings → Runtime → "Max Effort"** turns the orchestration
-off. The agent then analyses directly — same `model-scientist` definition, same
-Skills, same Tellurium, no seven-stage sequence. With it off the `Workflow` tool is
-withheld from the CLI (`--settings '{"enableWorkflows":false}'` and dropped from
-`--allowedTools`) and the local runtime stops offering `run_mca_workflow`, so the
-agent cannot quietly take the slow path anyway.
-
-`.claude/{agents,skills,workflows}` are symlinks, so anything you drop into
+`.claude/{agents,skills}` are symlinks, so anything you drop into
 `skills/` is live on the next turn — no restart, no copy step (on Windows they are
 copies: rerun `.\setup.cmd`).
 
@@ -289,7 +269,7 @@ is always the model that ran. When the agent changes the file, the turn ends wit
 
 | | |
 |---|---|
-| `GET /api/env` | tellurium / claude / agent / workflow / skills availability |
+| `GET /api/env` | tellurium / claude / agent / skills availability |
 | `GET`·`PUT /api/model` | the live Antimony source |
 | `POST /api/simulate` | `{model,start,end,points}` → timecourse + species/parameter ids |
 | `POST /api/steady` | steady state: distance, concentrations, fluxes |

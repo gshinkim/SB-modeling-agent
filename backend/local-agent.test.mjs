@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
-import { runLocalAgent, runWorkflowFile, scriptStem } from './local-agent.mjs';
+import { runLocalAgent, scriptStem } from './local-agent.mjs';
 import { Tellurium } from './tellurium.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -39,7 +39,7 @@ const baseUrl = 'http://127.0.0.1:' + srv.address().port;
 
 const events = [];
 await new Promise(done => {
-  runLocalAgent({ root: ROOT, prompt: 'go', useWorkflow: false,
+  runLocalAgent({ root: ROOT, prompt: 'go',
     chatCfg: { baseUrl, model: 'stub' },
     onEvent: e => { events.push(e); if (e.type === 'done') done(); } });
 });
@@ -103,7 +103,7 @@ else {
   });
   await new Promise(r => s2.listen(0, '127.0.0.1', r));
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'break it', useWorkflow: false, te,
+    runLocalAgent({ root: ROOT, prompt: 'break it', te,
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s2.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'done') done(); } });
   });
@@ -143,7 +143,7 @@ else {
   await new Promise(r => s3.listen(0, '127.0.0.1', r));
   let result = '';
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'look', useWorkflow: false,
+    runLocalAgent({ root: ROOT, prompt: 'look',
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s3.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'result') result = e.text; if (e.type === 'done') done(); } });
   });
@@ -161,7 +161,7 @@ else {
   let fatal = '';
   const t0 = Date.now();
   await new Promise(done => {
-    const run = runLocalAgent({ root: ROOT, prompt: 'x', useWorkflow: false,
+    const run = runLocalAgent({ root: ROOT, prompt: 'x',
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s4.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'fatal') fatal = e.error; if (e.type === 'done') done(); } });
     setTimeout(() => run.kill(), 200);
@@ -202,7 +202,7 @@ else {
   });
   await new Promise(r => s6.listen(0, '127.0.0.1', r));
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'jailbreak', useWorkflow: false,
+    runLocalAgent({ root: ROOT, prompt: 'jailbreak',
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s6.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'done') done(); } });
   });
@@ -236,7 +236,7 @@ else {
   });
   await new Promise(r => s7.listen(0, '127.0.0.1', r));
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'escape', useWorkflow: false,
+    runLocalAgent({ root: ROOT, prompt: 'escape',
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s7.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'done') done(); } });
   });
@@ -261,17 +261,6 @@ else {
   assert.equal(modelGate(run, new Set(['pathway-modeling']), true, new Set(['reference.md'])), null);
   assert.equal(modelGate(run, new Set(), false), null, 'run_python and other writes are not gated');
   console.log('ok (model write gate)');
-}
-
-// The workflow file has to compile as a function body: a second top-level `exec`
-// made it a SyntaxError, so every run_mca_workflow call failed before stage 1 and
-// the model was left to improvise the analysis on its own.
-{
-  const chat = { ctx: 32768, complete: async () => { throw new Error('reached the model'); } };
-  await assert.rejects(runWorkflowFile({ root: ROOT, chat, emit() {}, loaded: new Set(),
-    args: { question: 'q', model: '', needsNumbers: true, workdir: '/tmp', exec: 'x' } }),
-    /reached the model/);
-  console.log('ok (workflow compiles and reaches stage 1)');
 }
 
 // The Skill router: an auto-load before step 0 plus a reference read lets the
@@ -308,7 +297,7 @@ else {
                                : { auto: [], hint: [['mca', 0.7]], ms: 1 };
   };
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'build it', useWorkflow: false, modelPath, scratch: tmp, router,
+    runLocalAgent({ root: ROOT, prompt: 'build it', modelPath, scratch: tmp, router,
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s8.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'log') logs.push(e.text);
                       if (e.type === 'tools') shown.push(...e.tools);
@@ -349,7 +338,7 @@ else {
   });
   await new Promise(r => s8.listen(0, '127.0.0.1', r));
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'read it', useWorkflow: false,
+    runLocalAgent({ root: ROOT, prompt: 'read it',
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s8.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'done') done(); } });
   });
@@ -385,7 +374,7 @@ else {
   await new Promise(r => s9.listen(0, '127.0.0.1', r));
   let result;
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'go', useWorkflow: false,
+    runLocalAgent({ root: ROOT, prompt: 'go',
       router: async () => ({ auto: [['tellurium', 1]], hint: [], ms: 1 }),
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s9.address().port, model: 'stub', steps: 3 },
       onEvent: e => { if (e.type === 'result') result = e; if (e.type === 'done') done(); } });
@@ -425,7 +414,7 @@ else {
   });
   await new Promise(r => s10.listen(0, '127.0.0.1', r));
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'follow the link', useWorkflow: false, scratch,
+    runLocalAgent({ root: ROOT, prompt: 'follow the link', scratch,
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s10.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'done') done(); } });
   });
@@ -473,7 +462,7 @@ console.log('ok (run_python scripts named for what they do)');
   await new Promise(r => s10.listen(0, '127.0.0.1', r));
   const IMG = 'data:image/png;base64,AAAA';
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'what is on this gel?', images: [IMG], useWorkflow: false, scratch: tmp,
+    runLocalAgent({ root: ROOT, prompt: 'what is on this gel?', images: [IMG], scratch: tmp,
       router: async () => ({ auto: [['mca', 0.9]], hint: [], ms: 1 }),
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s10.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'done') done(); } });
@@ -509,7 +498,7 @@ console.log('ok (run_python scripts named for what they do)');
   await new Promise(r => s11.listen(0, '127.0.0.1', r));
   let result = null; const logs = [];
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'what is the flux?', useWorkflow: false,
+    runLocalAgent({ root: ROOT, prompt: 'what is the flux?',
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s11.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'result') result = e; if (e.type === 'log') logs.push(e.text); if (e.type === 'done') done(); } });
   });
@@ -544,7 +533,7 @@ console.log('ok (run_python scripts named for what they do)');
   });
   await new Promise(r => s12.listen(0, '127.0.0.1', r));
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'hi', useWorkflow: false,
+    runLocalAgent({ root: ROOT, prompt: 'hi',
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s12.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'done') done(); } });
   });
@@ -579,7 +568,7 @@ console.log('ok (run_python scripts named for what they do)');
   });
   await new Promise(r => s13.listen(0, '127.0.0.1', r));
   await new Promise(done => {
-    runLocalAgent({ root: ROOT, prompt: 'read the chapter', useWorkflow: false, scratch: tmp,
+    runLocalAgent({ root: ROOT, prompt: 'read the chapter', scratch: tmp,
       chatCfg: { baseUrl: 'http://127.0.0.1:' + s13.address().port, model: 'stub' },
       onEvent: e => { if (e.type === 'done') done(); } });
   });

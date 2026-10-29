@@ -424,18 +424,8 @@
   <div class="body">
     <div class="sect" data-panel="env">
       <p class="hint" style="margin:0 0 14px">The agent runs on the Claude Code CLI, so it can use the
-        project&rsquo;s Skills, the <code>mca-tellurium</code> workflow, Bash and file edits.</p>
+        project&rsquo;s Skills, Bash and file edits.</p>
       <div id="envBox"></div>
-      <label class="switch" for="wfToggle">
-        <input type="checkbox" id="wfToggle" checked>
-        <span>
-          <span class="t">Max Effort</span>
-          <span class="d">Every request goes through the full mca-tellurium workflow: frame &rarr; plan &rarr;
-            execute &rarr; validate &rarr; interpret &rarr; audit.
-            <strong>Warning: this takes a very long time, even for simple models</strong>, and longer still on a local model.
-            Off, the agent analyses directly &mdash; same Skills, same Tellurium, no orchestration.</span>
-        </span>
-      </label>
       <label class="switch" for="rtToggle">
         <input type="checkbox" id="rtToggle">
         <span>
@@ -494,7 +484,7 @@
       <button class="btn sm" id="addKey">+ Add endpoint</button>
     </div>
     <div class="sect" data-panel="local" hidden>
-      <p class="hint" style="margin:0 0 14px">Run models on this machine instead of the hosted API. The agent still needs tool-calling to drive the workflow.</p>
+      <p class="hint" style="margin:0 0 14px">Run models on this machine instead of the hosted API. The agent still needs tool-calling.</p>
       <div id="locFound"></div>
       <p class="hint" style="margin:14px 0 8px">Or point at servers yourself. Fill in as many as
         you use — every model you connect appears in the picker together, so Ollama and LM Studio

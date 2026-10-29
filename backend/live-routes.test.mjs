@@ -27,7 +27,7 @@ const srv = spawn('node', [join(ROOT, 'backend/server.mjs')],
 const until = async (ok, what) => { for (let i = 0; i < 200; i++) { if (await ok()) return; await new Promise(r => setTimeout(r, 50)); } throw new Error('timed out: ' + what); };
 const events = async res => (await res.text()).split('\n').filter(l => l.startsWith('data: ')).map(l => JSON.parse(l.slice(6)));
 const ask = (message, signal) => fetch(url('/api/chat'), { method: 'POST', signal, headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ message, chat: 7, runtime: 'openai', useWorkflow: false, scratchDir: tmp,
+  body: JSON.stringify({ message, chat: 7, runtime: 'openai', scratchDir: tmp,
                          chatCfg: { baseUrl: 'http://127.0.0.1:' + stub.address().port, model: 'stub' } }) });
 try {
   await until(() => fetch(url('/api/env')).then(r => r.ok, () => false), 'server start');

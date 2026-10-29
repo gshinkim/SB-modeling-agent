@@ -263,8 +263,8 @@ function slotFor(calls, tc) {
 /**
  * Run a tool by name, and when the model invents one, say what actually exists.
  *
- * The agent definition tells the model to call Read, Write, Edit, Skill and
- * Workflow; the local runtimes offer read_model/write_model/simulate/... instead.
+ * The agent definition tells the model to call Read, Write, Edit and Skill;
+ * the local runtimes offer read_model/write_model/simulate/... instead.
  * A model that follows the prose got back "impl[name] is not a function", which
  * names neither the problem nor the fix, so it had no way to recover.
  */
@@ -456,7 +456,7 @@ export const resultCap = (ctx = CONTEXT_DEFAULT, resultPct) =>
 
 /** Tool steps a turn gets before it is made to answer with what it has. */
 /** Settings → Budget → "No limit": the turn ends when the model answers, the same
-    call is repeated, the user presses Stop — or, for a workflow stage, its 15-minute clock. */
+    call is repeated, or the user presses Stop. */
 export const NO_STEP_LIMIT = 'none';
 export const stepBudget = steps => steps === NO_STEP_LIMIT ? Infinity : Math.round(share(steps, 'steps'));
 
@@ -545,7 +545,7 @@ export function fitMessages(messages, ctx = CONTEXT_DEFAULT, reserve = 1024) {
  *
  * A small model often names a tool and supplies nothing. `JSON.parse(args || '{}')`
  * turned that into a call with no arguments, which ran and failed somewhere deeper
- * — `run_mca_workflow` with no `question` came back "requires args.question", which
+ * — `write_file` with no `path` failed with an error about the path, which
  * tells the model nothing about what it did wrong. Naming the missing argument is
  * what lets it recover on the next step instead of guessing again.
  */
@@ -568,50 +568,6 @@ export function missingArgs(defs) {
 /* ---- the tool loop's shared pieces (backend/local-agent.mjs, web/js/agent.mjs) ---- */
 export const NO_ANSWER = '(the model produced no final answer)';
 export const hasNumber = t => /\d/.test(String(t ?? ''));
-
-/** What a workflow stage lets through: thinking, and `unthink` taking back answer
-    text that was really thinking (see thinkStream) — never the tokens themselves. */
-export const quiet = emit => ev => { if (ev.type === 'thinking' || ev.type === 'unthink') emit(ev); };
-
-/** Force the structured object the workflow stage declared. `complete` is the
-    runtime's own completion call. */
-export async function constrain({ complete, messages, schema, emit, signal }) {
-  const ask = { role: 'user', content:
-    'Now output ONLY a JSON object matching the required schema for this stage. No prose, no code fences.' };
-  const onStream = quiet(emit);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let m;
-    try { m = await complete({ messages: [...messages, ask], schema, signal, onStream }); }
-    catch (e) {
-      if (e?.name === 'AbortError') throw e;
-      m = await complete({ messages: [...messages, ask], signal, onStream }); // no json_schema support
-    }
-    const parsed = parseLoose(m.content);
-    if (parsed && typeof parsed === 'object') return fill(parsed, schema);
-    messages.push(forHistory(m),
-                  { role: 'user', content: 'That was not valid JSON. Output the JSON object only.' });
-  }
-  return fill({}, schema);            // never crash the workflow on a weak model
-}
-
-function parseLoose(text) {
-  if (!text) return null;
-  const t = String(text).replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '').trim();
-  try { return JSON.parse(t); } catch {}
-  const a = t.indexOf('{'), b = t.lastIndexOf('}');
-  if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch {} }
-  return null;
-}
-
-/** A missing required field must not throw inside the workflow's own template strings. */
-function fill(obj, schema) {
-  for (const k of schema.required ?? []) {
-    if (obj[k] !== undefined && obj[k] !== null) continue;
-    const t = schema.properties?.[k]?.type;
-    obj[k] = t === 'array' ? [] : t === 'boolean' ? false : t === 'object' ? {} : '';
-  }
-  return obj;
-}
 
 /** The API root for an endpoint as the user typed it: `/v1` is appended unless the
     URL already ends in a version. */
@@ -676,13 +632,13 @@ export async function completion(send, { model, messages, tools, closedTools, sc
 /* Tools that change the project, on either runtime (their tool names do not overlap).
    A repeat of any call is replayed from memory (see toolRunner), so anything that
    writes has to invalidate that memory. */
-const WRITES = ['write_file', 'run_python', 'write_model', 'run_mca_workflow'];
+const WRITES = ['write_file', 'run_python', 'write_model'];
 
 /* Tools that produce a number. Reading the model is not computing with it: a model
    that reads `k=0.4` and then reports a flux of 1.2 worked it out in its head, which
    is the one thing the agent is not allowed to do. The answer is still shown — it is
    labelled, so the user knows nothing behind the number was checked. */
-const COMPUTES = new Set(['run_python', 'simulate', 'steady_state', 'mca', 'run_mca_workflow']);
+const COMPUTES = new Set(['run_python', 'simulate', 'steady_state', 'mca']);
 
 function computedResult(name, out){
   if(!COMPUTES.has(name)) return false;
@@ -691,37 +647,33 @@ function computedResult(name, out){
   let data;
   try { data = JSON.parse(text); } catch {}
   if(data && typeof data === 'object' && (data.error || data.ok === false || data.success === false)) return false;
-  // A workflow can stop at framing or return UNVALIDATED after execution failed.
-  // Merely invoking it gives no evidence for the final answer's numbers.
-  if(name === 'run_mca_workflow') return data?.status === 'VALIDATED' &&
-    data.validation?.verdict === 'pass' && data.execution?.ran === true && hasNumber(data.execution.results);
   return hasNumber(text);
 }
 
-/* The loop itself: one copy for a stage and for the outer turn, on the server and in
+/* The loop itself: one copy, on the server and in
    the page. A runtime supplies what differs — its tools, its completion call, and
    `hook`: before(step) ahead of each completion, gate(name, args, run) to refuse a
    call (a string) or let it run (null), ran(name, args, out) after each one.
    Resolves to the answer's text (undefined if the steps ran out or the turn was
    stopped) and the names of the tools called. */
-async function toolLoop({ complete, messages, tools, emit, signal, maxSteps, ms = Infinity,
-                          cap = resultCap(), onStream = emit, hook = {} }) {
+async function toolLoop({ complete, messages, tools, emit, signal, maxSteps,
+                          cap = resultCap(), hook = {} }) {
   const run = toolRunner(tools.impl, WRITES), lacks = missingArgs(tools.defs);
-  const used = new Set(), t0 = Date.now();
+  const used = new Set();
   let computed = false;
   for (let step = 0; step < maxSteps; step++) {
     if (signal?.aborted) break;
     await hook.before?.(step);
-    // Out of steps or out of time: ask once more with NO tools, so the model has to
-    // answer. Breaking out here instead handed the stage back empty, which is what
+    // Out of steps: ask once more with NO tools, so the model has to
+    // answer. Breaking out here instead handed the turn back empty, which is what
     // the user saw as the agent going round in circles and then saying nothing.
     // ...or as soon as it is plainly stuck: a repeated call warned about twice
     // will be repeated a third time, and each one costs a step.
     const stuck = run.repeats >= REPEAT_LIMIT;
-    const wrapUp = step === maxSteps - 1 || Date.now() - t0 > ms || stuck;
+    const wrapUp = step === maxSteps - 1 || stuck;
     if (wrapUp) emit({ type: 'log', text: (stuck ? 'same call repeated ' + run.repeats + 'x'
-      : 'out of ' + (step === maxSteps - 1 ? 'steps' : 'time')) + '; answering with what it has' });
-    const m = await complete({ messages, tools: wrapUp ? undefined : tools.defs, signal, onStream });
+      : 'out of steps') + '; answering with what it has' });
+    const m = await complete({ messages, tools: wrapUp ? undefined : tools.defs, signal, onStream: emit });
     messages.push(forHistory(m));
     const calls = m.tool_calls ?? [];
     if (!calls.length) return { text: m.content ?? '', used, computed };
@@ -730,8 +682,7 @@ async function toolLoop({ complete, messages, tools, emit, signal, maxSteps, ms 
       const name = c.function?.name;
       let args = {};
       try { args = JSON.parse(c.function?.arguments || '{}'); } catch {}
-      emit({ type: 'tools', tools: [name === 'run_mca_workflow'
-        ? { name: 'Workflow', input: { workflow: 'mca-tellurium' } } : { name, input: args }] });
+      emit({ type: 'tools', tools: [{ name, input: args }] });
       used.add(name);
       const denied = lacks(name, args) ?? await hook.gate?.(name, args, run);
       const out = denied ?? await run(name, args);
@@ -750,51 +701,3 @@ export async function runTurn(o) {
   return { type: 'result', text: final || NO_ANSWER, isError: !final, noTools: !used.size,
            unverified: !computed && hasNumber(final) };
 }
-
-/** One workflow stage, on its 15-minute clock: the text it ends in, or the object
-    its `schema` declares. */
-export async function runStage({ schema, ms = 900000, ...o }) {
-  const { text } = await toolLoop({ ...o, ms, onStream: quiet(o.emit) });
-  if (o.signal?.aborted) throw new Error('aborted');
-  // Ask for the schema only once the model has stopped calling tools; many local
-  // models cannot emit a tool call and a constrained JSON object in one turn.
-  if (schema) return constrain({ ...o, schema });
-  return text ?? '(the model kept calling tools without answering)';
-}
-
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-
-/** Run the workflow file's exact source, supplying agent()/phase()/log().
-    `stage(messages, schema)` is the runtime's own call to runStage. */
-export function hostWorkflow({ src, system, args, emit, stage }) {
-  const agent = async (prompt, opts = {}) => {
-    emit({ type: 'phase', phase: opts.phase, label: opts.label });
-    return stage([{ role: 'system', content: system }, { role: 'user', content: prompt }], opts.schema);
-  };
-  return new AsyncFunction('agent', 'phase', 'log', 'args',
-    src.replace(/^\s*export\s+const\s+meta\s*=/m, 'const meta ='))(
-      agent, title => emit({ type: 'phase', phase: title }), msg => emit({ type: 'log', text: String(msg) }), args);
-}
-
-/** `tools` plus run_mca_workflow. `run({ question, needsNumbers })` is the runtime's
-    own call to hostWorkflow. */
-export const withWorkflow = (tools, { prompt, emit, cap, run }) => ({ ...tools,
-  impl: { ...tools.impl, run_mca_workflow: async ({ question, needsNumbers = true }) => {
-    // The model names the workflow and often supplies no question. It is
-    // always this turn's question, so use it rather than failing the stage.
-    question = String(question ?? '').trim() || prompt;
-    emit({ type: 'workflow_start' });
-    const out = await run({ question, needsNumbers });
-    emit({ type: 'workflow_done' });
-    // toolLoop caps what is sent back to the model after inspecting success.
-    // Truncating here destroys the JSON status needed to verify a computation.
-    return JSON.stringify(out);
-  } },
-  defs: [...tools.defs, { type: 'function', function: {
-    name: 'run_mca_workflow',
-    description: 'Run the enforced mca-tellurium workflow (MCA frame → Tellurium plan → ' +
-                 'execute → validate → interpret → audit). Use for any analysis.',
-    parameters: { type: 'object', properties: {
-      question: { type: 'string', description: 'the question, stated fully and standalone' },
-      needsNumbers: { type: 'boolean' },
-    }, required: ['question'] } } }] });

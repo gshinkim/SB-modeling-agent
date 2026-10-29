@@ -66,8 +66,7 @@ async function chatTurn(message) {
   const res = await fetch(url('/api/chat'), { method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ message, sessionId: null, sessionDirId: SID, resume: false,
-      runtime: 'openai', chatCfg: { baseUrl: stubUrl, model: 'stub' },
-      useWorkflow: false }) });
+      runtime: 'openai', chatCfg: { baseUrl: stubUrl, model: 'stub' } }) });
   if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error('chat failed: ' + (j.error ?? res.status)); }
   // Read until the connection actually closes, not just until a 'done' frame is
   // seen on the wire: server.mjs sends that frame BEFORE it awaits writing

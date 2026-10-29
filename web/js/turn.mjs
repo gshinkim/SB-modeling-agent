@@ -1,5 +1,5 @@
 // A whole thinking block that merely repeats the deltas just streamed should be
-// suppressed. But each workflow phase reasons fresh and often opens with the
+// suppressed. But each phase reasons fresh and often opens with the
 // same boilerplate as an earlier phase — comparing against the WHOLE turn's
 // `thoughts` buffer would silently drop a genuinely new block over a shared
 // opening. Scope the check to the text since the last "— phase —" separator
@@ -48,7 +48,7 @@ export function lineDiff(before, after){
    Stop is a 'closed' event with `stopped` set: the turn ends there, and whatever the
    runtime still emits afterwards (the hosted agent cannot be interrupted inside a
    tool call) is ignored instead of repainting or logging a turn the user ended. */
-const THOUGHTS_KEPT = 40000;   // ponytail: a long workflow's thinking is trimmed from the front past this
+const THOUGHTS_KEPT = 40000;   // ponytail: a long turn's thinking is trimmed from the front past this
 
 export function newTurn(q, c){
   const t = { body:'', thoughts:'', lastPhase:'', status:null, failed:false, logged:false, stopped:false,
@@ -56,8 +56,7 @@ export function newTurn(q, c){
               seen:new Set(), chips:new Map(), warns:[] };
 
   const addTool = tl => {
-    const label = tl.name==='Workflow'    ? 'workflow: mca-tellurium'
-                : tl.name==='run_python' || tl.name==='python' ? 'python'
+    const label = tl.name==='run_python' || tl.name==='python' ? 'python'
                 : tl.name==='load_skill'  ? 'skill: '+(tl.input?.name ?? '?')+(tl.input?.by ? ' ('+tl.input.by+')' : '')
                 : tl.name==='Skill'       ? 'skill: '+(tl.input?.skill ?? '?')
                 : tl.name==='read_file'   ? 'read'
@@ -74,8 +73,6 @@ export function newTurn(q, c){
     if(t.stopped) return false;
     if(ev.type==='session') c.sessionId = ev.sessionId;
     else if(ev.type==='init') t.status = 'Agent started…';
-    else if(ev.type==='workflow_start') t.status = 'Running mca-tellurium…';
-    else if(ev.type==='workflow_done') t.status = 'Workflow finished, composing the answer…';
     else if(ev.type==='phase'){
       if(ev.phase) t.seen.add('phase:'+ev.phase);
       // Each stage reasons from a fresh context, so without a heading the panel

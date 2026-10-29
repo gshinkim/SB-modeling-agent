@@ -31,7 +31,7 @@ try {
   });
   let done;
   const finished = new Promise(r => done = r);
-  const run = runLocalAgent({ root, scratch, prompt: 'q', useWorkflow: false,
+  const run = runLocalAgent({ root, scratch, prompt: 'q',
     chatCfg: { baseUrl, model: 'stub' }, onEvent: e => { if (e.type === 'done') done(); } });
   await loading;
   const started = Date.now();
@@ -42,33 +42,36 @@ try {
   console.log('Stop cancels LM Studio loading detection');
 
   if (new Tellurium(root).installed) {
-    let bodies = [];
+    // run_python is refused until a Skill file has been read (local-agent.mjs runGate)
+    const READ = { tool_calls: [{ index: 0, id: 'read0', type: 'function', function: {
+      name: 'read_file', arguments: JSON.stringify({ path: 'skills/tellurium/references/simulation.md' }) } }] };
+    let bodies = [], asked = 0;
     const python = await serve((req, res) => {
       if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); return res.end(); }
       let b = ''; req.on('data', d => b += d);
       req.on('end', () => {
         bodies.push(JSON.parse(b));
-        frame(res, bodies.length === 1 ? { tool_calls: [{ index: 0, id: 'run1', type: 'function', function: {
+        frame(res, bodies.length === 1 ? READ : bodies.length === 2 ? { tool_calls: [{ index: 0, id: 'run1', type: 'function', function: {
           name: 'run_python', arguments: JSON.stringify({ name: 'failed-script', code: 'import sys\nprint("partial output")\nsys.exit(2)' }),
         } }] } : { content: 'The script failed.' });
       });
     });
-    await new Promise(done => runLocalAgent({ root, scratch, prompt: 'q', useWorkflow: false,
+    await new Promise(done => runLocalAgent({ root, scratch, prompt: 'q',
       chatCfg: { baseUrl: python.baseUrl, model: 'stub' }, onEvent: e => { if (e.type === 'done') done(); } }));
-    const output = bodies[1].messages.find(m => m.tool_call_id === 'run1').content;
+    const output = bodies[2].messages.find(m => m.tool_call_id === 'run1').content;
     assert.match(output, /partial output/);
     assert.match(output, /\[failed\]/, 'nonzero exit must be visible even when stdout is nonempty');
     python.server.closeAllConnections(); python.server.close();
 
     const stopped = await serve((req, res) => {
       if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); return res.end(); }
-      req.resume(); req.on('end', () => frame(res, { tool_calls: [{ index: 0, id: 'run2', type: 'function', function: {
+      req.resume(); req.on('end', () => frame(res, !asked++ ? READ : { tool_calls: [{ index: 0, id: 'run2', type: 'function', function: {
         name: 'run_python', arguments: JSON.stringify({ name: 'stopped-script', code: 'import time\ntime.sleep(1)\nopen("after-stop.txt", "w").write("bad")' }),
       } }] }));
     });
     const began = Date.now();
     await new Promise(done => {
-      const active = runLocalAgent({ root, scratch, prompt: 'q', useWorkflow: false,
+      const active = runLocalAgent({ root, scratch, prompt: 'q',
         chatCfg: { baseUrl: stopped.baseUrl, model: 'stub' }, onEvent: e => {
           if (e.type === 'tools' && e.tools?.some(t => t.name === 'python')) setTimeout(() => active.kill(), 80);
           if (e.type === 'done') done();
