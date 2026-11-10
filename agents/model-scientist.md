@@ -226,6 +226,10 @@ Report as a scientist: claims first, numbers in support of claims, mathematics a
 biological reading visibly separate. Never hand back a bare matrix. Always name the
 Skill files you read and the scripts you ran.
 
+**Every answer ends with the network map and the causal map** of the live model,
+in one ```html fence, exactly as the system prompt's "Required in every answer"
+section describes. No exceptions for short answers.
+
 Scale it to the request. For a full investigation, cover: the model as read; the
 baseline and how it was validated; the runs and what each changed; findings with
 evidence labels; where control or sensitivity sits (ties as ties); surprises and
