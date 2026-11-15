@@ -1,86 +1,402 @@
 # SB modeling agent
 
-An expert agent for creating, fixing, understanding biochemical models: an Antimony model on the left, its
-simulation in the middle, its configuration on the right, and an agent that can
-read, edit, run and analyse the model the same way you can.
-## Note: Claude Code needs a subscription to use, unless you use local ai models using providers such as LmStudio and Ollama
+A free app for building, running and understanding biochemical models (systems biology).
+You write or paste a model, see its simulation as a plot, and chat with an AI assistant
+that can read your model, fix it, change it, run it and explain the results to you.
 
-## Install and run
+**Watch the video walkthrough first:** https://www.youtube.com/watch?v=lzYMwGxiaCc
 
-Runs on macOS, Linux and Windows. You need Git, Node.js 20+, Python 3.10–3.14, and
-Claude Code for the AI panel. The rest of the app works without Claude Code.
+> **You do not need to know programming to use this.** This guide assumes you have never
+> used a terminal or GitHub before. Follow the steps in order and copy-paste the commands
+> exactly. Setup takes about 30–60 minutes the first time, mostly waiting for downloads.
 
-## If you haven't installed git (needed to pull this repository), node, python (3.10 - 3.14) , and claude code (to use as agent), use the following instructions: 
+---
 
-| | macOS | Linux (Debian/Ubuntu) | Windows |
-|---|---|---|---|
-| Git | `xcode-select --install` | `sudo apt install git curl` | `winget install Git.Git` |
-| Node.js 20+ | `brew install node` | [nodejs.org](https://nodejs.org) or your package manager | `winget install OpenJS.NodeJS.LTS` |
-| Python | `brew install python@3.14` | `sudo apt install python3.14 python3.14-venv` | `winget install Python.Python.3.14` |
-| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` | `curl -fsSL https://claude.ai/install.sh \| bash` | PowerShell: `irm https://claude.ai/install.ps1 \| iex` |
+## Contents
 
-In a terminal, type 'claude' to start claude and log in.
+1. [What you need before you start](#1-what-you-need-before-you-start)
+2. [How to open a Terminal and paste commands](#2-how-to-open-a-terminal-and-paste-commands)
+3. [Install the required programs (one time)](#3-install-the-required-programs-one-time)
+4. [Download and set up the app (one time)](#4-download-and-set-up-the-app-one-time)
+5. [Start the app (every time)](#5-start-the-app-every-time)
+6. [Using the app](#6-using-the-app)
+7. [Stopping the app, and starting it again later](#7-stopping-the-app-and-starting-it-again-later)
+8. [Getting the newest version](#8-getting-the-newest-version)
+9. [Something went wrong (troubleshooting)](#9-something-went-wrong-troubleshooting)
+10. [Developer documentation](#developer-documentation)
 
-Then, on macOS or Linux in a terminal run the following commands:
+---
+
+## 1. What you need before you start
+
+- A computer running **macOS** (Mac), **Windows 10/11**, or **Linux**.
+- About **10 GB of free disk space** and a decent internet connection.
+- For the AI assistant, **one** of these:
+  - **Option A — Claude (easiest, best results):** a paid Claude subscription
+    (Pro or Max) from [claude.ai](https://claude.ai). You log in once and the app uses it.
+  - **Option B — Free, runs on your own computer:** install [Ollama](https://ollama.com/download)
+    or [LM Studio](https://lmstudio.ai). Slower and less smart than Claude, but no subscription.
+    Works best on a computer with 16 GB of memory or more.
+
+  The plot and simulation parts of the app work even with no AI at all.
+
+---
+
+## 2. How to open a Terminal and paste commands
+
+A **Terminal** is a window where you type commands instead of clicking. You will only
+need it to install and start the app.
+
+**On a Mac**
+1. Press `Cmd + Space`, type **Terminal**, press `Enter`.
+2. To paste a command: copy it from this page, click inside the Terminal window,
+   press `Cmd + V`, then press `Enter`.
+
+**On Windows**
+1. Click the Start button, type **PowerShell**, click **Windows PowerShell**.
+2. To paste a command: copy it from this page, then **right-click** inside the
+   PowerShell window (or press `Ctrl + V`), then press `Enter`.
+
+**On Linux:** open the "Terminal" app. Paste with `Ctrl + Shift + V`.
+
+Tips:
+- Paste **one command at a time** and wait until it finishes (the blinking cursor comes
+  back and you can type again) before pasting the next one.
+- If it asks for a **password**, type your computer login password and press `Enter`.
+  **Nothing shows on screen while you type it — that is normal.**
+- If it asks `Do you want to continue? [Y/n]`, type `y` and press `Enter`.
+- Lots of text scrolling by is normal. Only worry if you see the word `error` at the very end.
+
+---
+
+## 3. Install the required programs (one time)
+
+The app needs four free programs: **Git** (downloads the app), **Node.js** (runs the app),
+**Python** (does the math), and **Claude Code** (the AI assistant, only for Option A).
+
+**Important: after installing everything in this step, close the Terminal/PowerShell
+window and open a new one.** Otherwise the new programs will not be found.
+
+### On a Mac
+
+**3a. Install Homebrew** (a helper that installs the other programs). Paste:
 
 ```bash
-git clone https://github.com/gshinkim/SB-modeling-agent.git
-cd SB-modeling-agent
-bash setup.sh     # once: Python venv, Tellurium, the Layla router and its weights
-                  # uses your existing Python (never downloads one); PYTHON=/path/to/python3 bash setup.sh picks it
-bash run.sh       # open http://127.0.0.1:5173
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
-On Windows, in a terminal run the following commands:
+It will ask for your password and to press `Enter`. It can take 5–15 minutes and may
+also install Apple's "Command Line Tools" (this gives you Git).
+
+**When it finishes, read the last lines.** Under **"Next steps"** it shows two or three
+commands that start with `echo` or `eval`. Copy and paste those lines too, one at a time.
+(If you skip this, the next commands will say `brew: command not found`.)
+
+**3b. Install Node.js and Python.** Paste:
+
+```bash
+brew install node python@3.14
+```
+
+**3c. (Option A only) Install Claude Code.** Paste:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+### On Windows
+
+Paste these into PowerShell one at a time. Click **Yes** if Windows asks for permission.
 
 ```powershell
-git clone https://github.com/gshinkim/SB-modeling-agent.git
-cd SB-modeling-agent
-.\setup.cmd       # once
-.\run.cmd         # open http://127.0.0.1:5173
+winget install Git.Git
+```
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+```powershell
+winget install Python.Python.3.14
 ```
 
-Do not type `bash setup.sh` in PowerShell or cmd: `bash` there is the WSL launcher,
-not Git Bash. `setup.cmd` finds Git's own bash and runs `setup.sh` with it.
+(Option A only) Install Claude Code:
 
-Windows notes:
+```powershell
+irm https://claude.ai/install.ps1 | iex
+```
 
-- Install Claude Code with the native installer above or go to the Anthropic website and follow the instructions to install claude code. Do not use `npm install -g`. npm
-  installs a `claude.cmd` shim, which the app cannot start; the installer gives
-  `claude.exe`.
-- Open a new terminal after installing anything, so it is on `PATH`.
-- `.claude/{agents,skills}` are copies on Windows, not symlinks. After
-  adding or editing a Skill, rerun `.\setup.cmd` to refresh them.
-- WSL2 also works; inside it, follow the Linux column.
+> Do **not** install Claude Code with `npm install -g` on Windows. The app cannot use
+> that version. Use the command above.
 
-`setup.sh` takes several minutes and several GB on first run (PyTorch and the router
-weights are the bulk). `SKIP_LAYLA=1 ./setup.sh` skips the router; the app then uses
-Jev, or no router at all. Rerunning `setup.sh` is safe.
+If `winget` says "not recognized", update **App Installer** from the Microsoft Store and try again.
 
-### Updating the application (if there is a newer version) run the following:
+### On Linux (Ubuntu/Debian)
 
 ```bash
-git pull
-bash setup.sh     # safe to rerun: picks up new requirements, refreshes .claude/
+sudo apt update && sudo apt install -y git curl python3.14 python3.14-venv
+```
+
+Install Node.js 20 or newer from [nodejs.org](https://nodejs.org) (choose the "LTS" version).
+(Option A only) install Claude Code:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+### Log in to Claude (Option A only, all computers)
+
+**Close the window and open a new Terminal/PowerShell.** Then type:
+
+```bash
+claude
+```
+
+Follow what it says on screen to log in with your Claude account (it opens a browser).
+When you see a chat prompt, type `/exit` and press `Enter`. You only do this once.
+
+### Check that everything installed
+
+Open a new Terminal/PowerShell and paste these. Each should print a version number:
+
+```bash
+git --version
+node --version
+```
+
+`node --version` must show `v20` or higher. If a command says "not found" /
+"not recognized", see [Troubleshooting](#9-something-went-wrong-troubleshooting).
+
+---
+
+## 4. Download and set up the app (one time)
+
+This downloads the app into a folder called `SB-modeling-agent` inside your home folder
+and installs everything it needs.
+
+### On Mac or Linux
+
+Paste these one at a time:
+
+```bash
+cd ~
+```
+```bash
+git clone https://github.com/gshinkim/SB-modeling-agent.git
+```
+```bash
+cd SB-modeling-agent
+```
+```bash
+bash setup.sh
+```
+
+### On Windows (PowerShell)
+
+```powershell
+cd ~
+```
+```powershell
+git clone https://github.com/gshinkim/SB-modeling-agent.git
+```
+```powershell
+cd SB-modeling-agent
+```
+```powershell
+.\setup.cmd
+```
+
+> On Windows, type `.\setup.cmd` exactly. Do **not** type `bash setup.sh` in PowerShell.
+
+**Setup takes 10–40 minutes** and downloads several GB (one file alone is about 800 MB).
+Let it run. It is finished when you see:
+
+```
+Setup complete.  Start with:  ./run.sh
+```
+
+If you see `NOTE: the 'claude' CLI is not on PATH`, the app still works, but the
+Claude assistant will not until you install Claude Code and log in (step 3).
+
+> **Low on disk space or slow internet?** You can skip the biggest download (an optional
+> helper that picks which expert knowledge the AI loads). On Mac/Linux run
+> `SKIP_LAYLA=1 bash setup.sh` instead of `bash setup.sh`. The app still works.
+
+---
+
+## 5. Start the app (every time)
+
+In the same Terminal window (you should still be in the `SB-modeling-agent` folder):
+
+**Mac / Linux:**
+```bash
 bash run.sh
 ```
 
-On Windows: `git pull`, then `.\setup.cmd`, then `.\run.cmd`.
+**Windows:**
+```powershell
+.\run.cmd
+```
 
-To update the tools themselves:
+You will see a line like:
 
-| | macOS | Linux (Debian/Ubuntu) | Windows |
-|---|---|---|---|
-| Claude Code | `claude update` | `claude update` | `claude update` |
-| Node.js | `brew upgrade node` | your package manager | `winget upgrade OpenJS.NodeJS.LTS` |
-| Python | stay on 3.10–3.14 | stay on 3.10–3.14 | stay on 3.10–3.14 |
+```
+MCA Atlas  →  http://127.0.0.1:5173
+```
 
-If you change the Python version, delete `.venv` and rerun `bash setup.sh`.
-# How to Run the app: 
-https://www.youtube.com/watch?v=lzYMwGxiaCc
+Now open your web browser (Chrome, Safari, Edge, Firefox) and go to:
 
+### **http://127.0.0.1:5173**
 
-## Developer Documentation
+That is the app. **Keep the Terminal window open while you use it** — closing it
+stops the app. The app runs only on your computer; nothing is put on the internet.
+
+---
+
+## 6. Using the app
+
+The screen has three main parts:
+
+- **The model** — your biochemical model, written in **Antimony**, a simple text format
+  for reactions. Example:
+  ```
+  J1: S1 -> S2; k1*S1
+  J2: S2 -> ;   k2*S2
+  S1 = 10; S2 = 0
+  k1 = 0.5; k2 = 0.2
+  ```
+  This means: S1 turns into S2 at rate `k1*S1`, and S2 is removed at rate `k2*S2`.
+  You do not need to learn Antimony to start — you can ask the AI to write it for you.
+- **The simulation** — a plot of how each species changes over time. It updates when
+  you edit the model. Use the **Steady state** button to see where the system settles,
+  and **Download** to save the plot (PNG/SVG) or the numbers (CSV, opens in Excel).
+- **The AI assistant** — a chat box at the bottom
+  ("Ask about the model, or tell it what to change…"). Type a request and press **Send**.
+
+### Choosing the AI
+
+Pick it in the **AI model** dropdown next to the chat box.
+
+- **Option A (Claude):** choose **Claude (default to your CLI)**. It uses the Claude account you logged in with.
+- **Option B (free, local):**
+  1. Install and open [Ollama](https://ollama.com/download) or [LM Studio](https://lmstudio.ai).
+  2. Download a model. For Ollama, in a Terminal run: `ollama pull qwen3:8b`
+     (about 5 GB). In LM Studio, use its search tab to download a model, then load it.
+  3. Reload the app page. The model appears in the **AI model** dropdown
+     (for example `Ollama · qwen3:8b`). Pick it.
+  4. If it does not appear, open **Settings** (the gear button at the bottom of the left edge) →
+     **Local models** → **Start Ollama**, then reload.
+
+### Things you can ask
+
+- "Build a model of a three-step linear pathway with feedback inhibition on the first enzyme."
+- "Why does my model not reach steady state?"
+- "Which reaction controls the flux the most? Run a metabolic control analysis."
+- "Increase k1 by 50% and explain what changes."
+- "Explain this model to me like I'm a first-year biology student."
+
+The assistant edits the model directly, so the editor and plot update on their own.
+Each answer ends with a network map and a causal map of the model.
+
+Your model is saved automatically in the `workspace` folder inside `SB-modeling-agent`.
+
+---
+
+## 7. Stopping the app, and starting it again later
+
+**To stop:** click the Terminal window and press `Ctrl + C` (on Mac too — `Ctrl`, not `Cmd`),
+or just close the window.
+
+**To start again another day:** open a new Terminal/PowerShell and paste:
+
+Mac / Linux:
+```bash
+cd ~/SB-modeling-agent
+```
+```bash
+bash run.sh
+```
+
+Windows:
+```powershell
+cd ~\SB-modeling-agent
+```
+```powershell
+.\run.cmd
+```
+
+Then open **http://127.0.0.1:5173** in your browser. You do **not** need to run setup again.
+
+---
+
+## 8. Getting the newest version
+
+When the app is updated, open a Terminal/PowerShell and paste these one at a time:
+
+Mac / Linux:
+```bash
+cd ~/SB-modeling-agent
+```
+```bash
+git pull
+```
+```bash
+bash setup.sh
+```
+```bash
+bash run.sh
+```
+
+Windows:
+```powershell
+cd ~\SB-modeling-agent
+```
+```powershell
+git pull
+```
+```powershell
+.\setup.cmd
+```
+```powershell
+.\run.cmd
+```
+
+Running setup again is safe; it only adds what is new. To update Claude Code itself, run `claude update`.
+
+---
+
+## 9. Something went wrong (troubleshooting)
+
+**First thing to try for almost any problem:** close every Terminal/PowerShell window,
+open a new one, and try again. New programs are only found by new windows.
+
+| What you see | What to do |
+|---|---|
+| `command not found` / `is not recognized` (for `git`, `node`, `python`, `claude`) | The program is not installed, or the window is old. Open a new window. Still failing? Redo that program's install in [step 3](#3-install-the-required-programs-one-time). |
+| `brew: command not found` (Mac) | You missed Homebrew's "Next steps" lines. Rerun the Homebrew install command from step 3a and paste the lines it shows at the end. |
+| `Need Node.js 20 or newer` | Your Node.js is too old. Mac: `brew upgrade node`. Windows: `winget upgrade OpenJS.NodeJS.LTS`. Then open a new window. |
+| `Need Python 3.10-3.14 for Tellurium` | Install Python as in step 3, open a new window, and run setup again. |
+| `fatal: destination path 'SB-modeling-agent' already exists` | You already downloaded it. Skip `git clone`; just run `cd SB-modeling-agent` and continue. |
+| `No such file or directory` / `Cannot find path` when running `cd SB-modeling-agent` or `run.sh` | You are in the wrong folder. Run `cd ~/SB-modeling-agent` (Windows: `cd ~\SB-modeling-agent`) first. |
+| `Run ./setup.sh first.` | Setup did not finish. Run step 4's setup command again. |
+| `WARNING: could not download Layla's weights` | Internet hiccup. Run setup again. Or skip it: `SKIP_LAYLA=1 bash setup.sh` (the app still works). |
+| `EADDRINUSE` when starting | The app is already running in another window. Use that one, or close it and start again. |
+| Browser says "This site can't be reached" | The Terminal running the app was closed or stopped. Start it again (step 5) and keep it open. |
+| AI says Claude is not available | Run `claude` in a Terminal and log in (step 3), then restart the app. You need a paid Claude plan. |
+| Local model not in the dropdown | Make sure Ollama or LM Studio is open and you downloaded a model, then reload the page. |
+| Using Python other than the one setup found | Mac/Linux: `PYTHON=/path/to/python3 bash setup.sh`. If you change Python versions, delete the `.venv` folder inside `SB-modeling-agent` and run setup again. |
+
+Windows extras:
+- Using WSL2 (Linux inside Windows)? Follow the Linux steps inside it.
+- If you add or edit a Skill in the `skills` folder, run `.\setup.cmd` again so the app sees it.
+
+Still stuck? Open an issue at https://github.com/gshinkim/SB-modeling-agent/issues and
+paste the last ~20 lines from your Terminal.
+
+---
+
+## Developer documentation
+
+_Everything below is for programmers who want to change, host, or extend the app. You do not need it to use the app._
+
 ## How it fits together
 
 ```
